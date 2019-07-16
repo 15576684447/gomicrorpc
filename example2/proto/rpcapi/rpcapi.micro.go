@@ -6,7 +6,7 @@ package rpcapi
 import (
 	fmt "fmt"
 	proto "github.com/golang/protobuf/proto"
-	model "github.com/lpxxn/gomicrorpc/example2/proto/model"
+	"learn/gomicrorpc/example2/proto/model"
 	math "math"
 )
 

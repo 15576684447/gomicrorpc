@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package rpcapi;
-import "github.com/lpxxn/gomicrorpc/example2/proto/model/common.proto";
+import "learn/gomicrorpc/example2/proto/model/common.proto";
 
 // 服务接口
 service Say {
