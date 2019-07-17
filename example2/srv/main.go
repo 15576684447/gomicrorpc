@@ -2,6 +2,8 @@ package main
 
 import (
 	"github.com/micro/go-micro"
+	"github.com/micro/go-micro/registry"
+	"github.com/micro/go-micro/registry/consul"
 	"github.com/micro/go-micro/server"
 	"learn/gomicrorpc/example2/common"
 	"learn/gomicrorpc/example2/handler"
@@ -11,12 +13,23 @@ import (
 )
 
 func main() {
+	reg := consul.NewRegistry(func(op *registry.Options) { //使用consul作为服务发现
+		op.Addrs = []string{
+			"127.0.0.1:8500",
+		}
+	})
 	// 初始化服务
 	service := micro.NewService(
-		micro.Name(common.ServiceName),
+		micro.Registry(reg),
+		micro.Name(common.ServiceName2),
 		micro.RegisterTTL(time.Second*30),
-		micro.RegisterInterval(time.Second*20),
-	)
+		micro.RegisterInterval(time.Second*20))
+	/*
+		service := micro.NewService(//使用默认服务发现mdns
+			micro.Name(common.ServiceName),
+			micro.RegisterTTL(time.Second*30),
+			micro.RegisterInterval(time.Second*20),
+		)*/
 
 	service.Init()
 	// 注册 Handler

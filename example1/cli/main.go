@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/micro/go-micro"
+	"github.com/micro/go-micro/registry"
+	"github.com/micro/go-micro/registry/consul"
 	model "learn/gomicrorpc/example1/proto"
+	"learn/gomicrorpc/example2/common"
 )
 
 func main() {
@@ -22,17 +25,28 @@ func main() {
 			micro.Registry(reg),
 		)
 	*/
+	//使用consul作为服务发现
+	reg := consul.NewRegistry(func(op *registry.Options) { //使用consul作为服务发现
+		op.Addrs = []string{
+			"127.0.0.1:8500",
+		}
+	})
+	// 初始化服务
+	service := micro.NewService(micro.Registry(reg), micro.Name(common.ServiceName1))
+
 	// 2019年源码有变动默认使用的是mdns面不是consul了
 	// 如果你用的是默认的注册方式把上面的注释掉用下面的
 
 	// 初始化服务
-	service := micro.NewService(
-		micro.Name("lp.srv.eg1"),
-	)
+	/*
+		service := micro.NewService(//使用默认服务发现mdns
+			micro.Name(common.ServiceName1)),
+		)
+	*/
 
 	service.Init()
 
-	sayClent := model.NewSayService("lp.srv.eg1", service.Client())
+	sayClent := model.NewSayService(common.ServiceName1, service.Client())
 
 	rsp, err := sayClent.Hello(context.Background(), &model.SayParam{Msg: "hello server"})
 	if err != nil {

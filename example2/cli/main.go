@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"github.com/micro/go-micro"
 	"github.com/micro/go-micro/client"
+	"github.com/micro/go-micro/registry"
+	"github.com/micro/go-micro/registry/consul"
 	"io"
 	"learn/gomicrorpc/example2/common"
 	"learn/gomicrorpc/example2/lib"
@@ -15,13 +17,19 @@ import (
 )
 
 func main() {
+	reg := consul.NewRegistry(func(op *registry.Options) { //使用consul作为服务发现
+		op.Addrs = []string{
+			"127.0.0.1:8500",
+		}
+	})
 	// 初始化服务
-	service := micro.NewService()
+	service := micro.NewService(micro.Registry(reg), micro.Name(common.ServiceName2))
 
+	//service := micro.NewService()//使用默认服务发现mdns
 	service.Init()
 	service.Client().Init(client.Retries(3),
 		client.PoolSize(5))
-	sayClent := rpcapi.NewSayService(common.ServiceName, service.Client())
+	sayClent := rpcapi.NewSayService(common.ServiceName2, service.Client())
 
 	SayHello(sayClent)
 	NotifyTopic(service)
