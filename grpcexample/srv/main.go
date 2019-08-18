@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lpxxn/gomicrorpc/grpcexample/common"
-	model "github.com/lpxxn/gomicrorpc/grpcexample/proto"
 	"github.com/micro/go-micro"
 	"github.com/micro/go-micro/server/grpc"
+	"learn/gomicrorpc/grpcexample/common"
+	model "learn/gomicrorpc/grpcexample/proto"
 )
 
 type Say struct{}
