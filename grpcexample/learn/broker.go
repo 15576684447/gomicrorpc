@@ -1,6 +1,10 @@
 package learn
 
 //go micro中Broker解析
+//https://www.jianshu.com/p/4c13e3e98707
+/*对应源码文件：github.com/go-micro/broker/http_broker.go
+当然这是默认broker，也可以使用其他broker，如kafka,nsq等等
+*/
 
 /*
 type Broker interface {
