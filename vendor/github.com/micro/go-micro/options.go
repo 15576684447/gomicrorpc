@@ -36,7 +36,7 @@ type Options struct {
 func newOptions(opts ...Option) Options {
 	opt := Options{
 		Broker:    broker.DefaultBroker,//HttpBroker
-		Cmd:       cmd.DefaultCmd,
+		Cmd:       cmd.DefaultCmd,//用于接收参数设置，并设置默认参数配置
 		Client:    client.DefaultClient,
 		Server:    server.DefaultServer,
 		Registry:  registry.DefaultRegistry,
