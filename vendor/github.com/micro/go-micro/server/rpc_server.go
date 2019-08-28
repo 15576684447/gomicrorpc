@@ -232,7 +232,7 @@ func (s *rpcServer) Init(opts ...Option) error {
 	s.Unlock()
 	return nil
 }
-
+//返回一个rpcServer路由表的终端
 func (s *rpcServer) NewHandler(h interface{}, opts ...HandlerOption) Handler {
 	return s.router.NewHandler(h, opts...)
 }

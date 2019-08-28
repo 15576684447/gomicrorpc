@@ -17,8 +17,9 @@ import (
 type Server interface {
 	Options() Options
 	Init(...Option) error
-	Handle(Handler) error
-	NewHandler(interface{}, ...HandlerOption) Handler
+	Handle(Handler) error//将rpcHandler注册表添加到serviceMap路由表中
+	//NewHandler获取了registry.Endpoint信息，但是在Handle时并没有用到，为啥？
+	NewHandler(interface{}, ...HandlerOption) Handler//返回一个该接口的rpcHandler注册表
 	NewSubscriber(string, interface{}, ...SubscriberOption) Subscriber
 	Subscribe(Subscriber) error
 	Start() error
