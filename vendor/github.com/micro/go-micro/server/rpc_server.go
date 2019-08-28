@@ -130,10 +130,11 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 				return
 			}
 		}
-
+		//使用解码器解码出接收的消息
 		rcodec := newRpcCodec(&msg, sock, cf)
 
 		// internal request
+		//将解析结果组装成内部request请求格式
 		request := &rpcRequest{
 			service:     getHeader("Micro-Service", msg.Header),
 			method:      getHeader("Micro-Method", msg.Header),
