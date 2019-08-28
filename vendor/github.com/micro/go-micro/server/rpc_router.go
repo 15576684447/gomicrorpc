@@ -402,6 +402,7 @@ func (router *router) NewHandler(h interface{}, opts ...HandlerOption) Handler {
 func (router *router) Handle(h Handler) error {
 	router.mu.Lock()
 	defer router.mu.Unlock()
+	//如果还没serviceMap，新建一个
 	if router.serviceMap == nil {
 		router.serviceMap = make(map[string]*service)
 	}
@@ -419,17 +420,23 @@ func (router *router) Handle(h Handler) error {
 	s.rcvr = reflect.ValueOf(rcvr)
 
 	// check name
+	//如果serviceMap已经注册了该服务，则不再注册
 	if _, present := router.serviceMap[h.Name()]; present {
 		return errors.New("rpc.Handle: service already defined: " + h.Name())
 	}
 
 	s.name = h.Name()
+	//如果还未注册，则新建一个name-methodType的方法映射表，方法名为(对象名.方法名)组合，如Say.Hello
 	s.method = make(map[string]*methodType)
 
 	// Install the methods
+	//遍历所有方法，安装该handler的所有方法
 	for m := 0; m < s.typ.NumMethod(); m++ {
+		//获取方法
 		method := s.typ.Method(m)
+		//获取对应方法的方法名，参数名等
 		if mt := prepareMethod(method); mt != nil {
+			//安装方法
 			s.method[method.Name] = mt
 		}
 	}
@@ -440,6 +447,7 @@ func (router *router) Handle(h Handler) error {
 	}
 
 	// save handler
+	//将该handler的注册表加入到serviceMap的路由表中
 	router.serviceMap[s.name] = s
 	return nil
 }
