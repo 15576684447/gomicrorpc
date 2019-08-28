@@ -95,7 +95,9 @@ func isExportedOrBuiltinType(t reflect.Type) bool {
 // prepareMethod returns a methodType for the provided method or nil
 // in case if the method was unsuitable.
 func prepareMethod(method reflect.Method) *methodType {
+	//获取方法类型
 	mtype := method.Type
+	//获取方法名
 	mname := method.Name
 	var replyType, argType, contextType reflect.Type
 	var stream bool
@@ -104,14 +106,14 @@ func prepareMethod(method reflect.Method) *methodType {
 	if method.PkgPath != "" {
 		return nil
 	}
-
+	//获取方法输入参数个数
 	switch mtype.NumIn() {
-	case 3:
+	case 3://共3个参数，判定为stream函数，获取参数类型和context类型
 		// assuming streaming
 		argType = mtype.In(2)
 		contextType = mtype.In(1)
 		stream = true
-	case 4:
+	case 4://4个参数，获取参数类型，返回类型以及context类型
 		// method that takes a context
 		argType = mtype.In(2)
 		replyType = mtype.In(3)
@@ -123,6 +125,7 @@ func prepareMethod(method reflect.Method) *methodType {
 
 	if stream {
 		// check stream type
+		//如果参数类型为获Stream类型，获取Stream的特有接口，并检查argType是否实现了Stream的所有接口
 		streamType := reflect.TypeOf((*Stream)(nil)).Elem()
 		if !argType.Implements(streamType) {
 			log.Log(mname, "argument does not implement Stream interface:", argType)
@@ -130,7 +133,7 @@ func prepareMethod(method reflect.Method) *methodType {
 		}
 	} else {
 		// if not stream check the replyType
-
+		//如果参数类型不是Stream类型，则检查replyType是否为非指针，是否神明为export
 		// First arg need not be a pointer.
 		if !isExportedOrBuiltinType(argType) {
 			log.Log(mname, "argument type not exported:", argType)
@@ -148,13 +151,14 @@ func prepareMethod(method reflect.Method) *methodType {
 			return nil
 		}
 	}
-
+	//检查是否有一个参数返回
 	// Method needs one out.
 	if mtype.NumOut() != 1 {
 		log.Log("method", mname, "has wrong number of outs:", mtype.NumOut())
 		return nil
 	}
 	// The return type of the method must be error.
+	//返回参数必须为error类型
 	if returnType := mtype.Out(0); returnType != typeOfError {
 		log.Log("method", mname, "returns", returnType.String(), "not error")
 		return nil
@@ -178,10 +182,10 @@ func (router *router) sendResponse(sending sync.Locker, req *request, reply inte
 
 func (s *service) call(ctx context.Context, router *router, sending *sync.Mutex, mtype *methodType, req *request, argv, replyv reflect.Value, cc codec.Writer) error {
 	defer router.freeRequest(req)
-
+	//获取函数方法
 	function := mtype.method.Func
 	var returnValues []reflect.Value
-
+	//解析req参数
 	r := &rpcRequest{
 		service:     req.msg.Target,
 		contentType: req.msg.Header["Content-Type"],
@@ -194,12 +198,14 @@ func (s *service) call(ctx context.Context, router *router, sending *sync.Mutex,
 	if argv.IsValid() {
 		r.rawBody = argv.Interface()
 	}
-
+	//如果不是Stream类型方法，执行如下
 	if !mtype.stream {
 		fn := func(ctx context.Context, req Request, rsp interface{}) error {
+			//利用反射调用方法函数，并传入参数
 			returnValues = function.Call([]reflect.Value{s.rcvr, mtype.prepareContext(ctx), reflect.ValueOf(argv.Interface()), reflect.ValueOf(rsp)})
 
 			// The return value for the method is an error.
+			//解析返回值是否为error类型，并且解析其结果
 			if err := returnValues[0].Interface(); err != nil {
 				return err.(error)
 			}
@@ -213,6 +219,7 @@ func (s *service) call(ctx context.Context, router *router, sending *sync.Mutex,
 		}
 
 		// execute handler
+		//正式调用函数
 		if err := fn(ctx, r, replyv.Interface()); err != nil {
 			return err
 		}
@@ -220,7 +227,7 @@ func (s *service) call(ctx context.Context, router *router, sending *sync.Mutex,
 		// send response
 		return router.sendResponse(sending, req, replyv.Interface(), cc, true)
 	}
-
+	//如果是Stream类型方法，执行如下
 	// declare a local error to see if we errored out already
 	// keep track of the type, to make sure we return
 	// the same one consistently
@@ -233,7 +240,9 @@ func (s *service) call(ctx context.Context, router *router, sending *sync.Mutex,
 
 	// Invoke the method, providing a new value for the reply.
 	fn := func(ctx context.Context, req Request, stream interface{}) error {
+		//利用反射调用方法函数，并且传入参数
 		returnValues = function.Call([]reflect.Value{s.rcvr, mtype.prepareContext(ctx), reflect.ValueOf(stream)})
+		//检查返回值
 		if err := returnValues[0].Interface(); err != nil {
 			// the function returned an error, we use that
 			return err.(error)
@@ -254,6 +263,7 @@ func (s *service) call(ctx context.Context, router *router, sending *sync.Mutex,
 	r.stream = true
 
 	// execute handler
+	//正式调用函数
 	return fn(ctx, r, rawStream)
 }
 
