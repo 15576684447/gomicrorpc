@@ -97,7 +97,7 @@ func (t *grpcTransport) Dial(addr string, opts ...transport.DialOption) (transpo
 	options := []grpc.DialOption{
 		grpc.WithTimeout(dopts.Timeout),
 	}
-
+	//如果指定了Secure参数，则指定transport的Credential
 	if t.opts.Secure || t.opts.TLSConfig != nil {
 		config := t.opts.TLSConfig
 		if config == nil {
@@ -106,8 +106,11 @@ func (t *grpcTransport) Dial(addr string, opts ...transport.DialOption) (transpo
 			}
 		}
 		creds := credentials.NewTLS(config)
+		//添加secure的option
 		options = append(options, grpc.WithTransportCredentials(creds))
 	} else {
+		//否则采用Insecure方式
+		//添加Insecure的option
 		options = append(options, grpc.WithInsecure())
 	}
 
@@ -137,7 +140,9 @@ func (t *grpcTransport) Listen(addr string, opts ...transport.ListenOption) (tra
 	for _, o := range opts {
 		o(&options)
 	}
-
+	//addr为输入IP:[port...]，指定一个port区间，是为了尝试绑定区间内可行的 IP:host，有成功就返回，否则返回失败(未找到)
+	//如果port只指定了一个，直接返回fn
+	//功能是从候选的范围内选择一个可行的
 	ln, err := mnet.Listen(addr, func(addr string) (net.Listener, error) {
 		return net.Listen("tcp", addr)
 	})
