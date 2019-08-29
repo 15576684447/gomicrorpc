@@ -451,9 +451,10 @@ func (router *router) Handle(h Handler) error {
 	router.serviceMap[s.name] = s
 	return nil
 }
-
+//服务端响应函数调用请求
 func (router *router) ServeRequest(ctx context.Context, r Request, rsp Response) error {
 	sending := new(sync.Mutex)
+	//解析请求的参数
 	service, mtype, req, argv, replyv, keepReading, err := router.readRequest(r)
 	if err != nil {
 		if !keepReading {
@@ -465,5 +466,6 @@ func (router *router) ServeRequest(ctx context.Context, r Request, rsp Response)
 		}
 		return err
 	}
+	//service发起真正的调用请求，通过反射实现
 	return service.call(ctx, router, sending, mtype, req, argv, replyv, rsp.Codec())
 }

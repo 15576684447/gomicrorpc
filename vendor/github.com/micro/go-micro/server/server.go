@@ -20,8 +20,8 @@ type Server interface {
 	Handle(Handler) error//将rpcHandler注册表添加到serviceMap路由表中
 	//NewHandler获取了registry.Endpoint信息，但是在Handle时并没有用到，为啥？
 	NewHandler(interface{}, ...HandlerOption) Handler//返回一个该接口的rpcHandler注册表
-	NewSubscriber(string, interface{}, ...SubscriberOption) Subscriber
-	Subscribe(Subscriber) error
+	NewSubscriber(string, interface{}, ...SubscriberOption) Subscriber//根据传入的接口(可能是函数，也可能是对象),解析方法名以及参数列表，生成handler表以及endpoint表
+	Subscribe(Subscriber) error//检查subscribe接口的合法性，如果合法并且接口未注册，则注册至subscribers表格
 	Start() error
 	Stop() error
 	String() string

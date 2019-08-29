@@ -70,6 +70,7 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 
 	for {
 		var msg transport.Message
+		//接收sock数据
 		if err := sock.Recv(&msg); err != nil {
 			return
 		}
@@ -85,6 +86,7 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 		ct := msg.Header["Content-Type"]
 
 		// strip our headers
+		//解析接收到消息header的kv值
 		hdr := make(map[string]string)
 		for k, v := range msg.Header {
 			hdr[k] = v
@@ -95,9 +97,11 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 		hdr["Remote"] = sock.Remote()
 
 		// create new context
+		//根据消息的header值，构造新的Context
 		ctx := metadata.NewContext(context.Background(), hdr)
 
 		// set the timeout if we have it
+		//如果消息中有timeout参数，则在新的context中加入该参数
 		if len(to) > 0 {
 			if n, err := strconv.ParseUint(to, 10, 64); err == nil {
 				ctx, _ = context.WithTimeout(ctx, time.Duration(n))
@@ -105,6 +109,7 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 		}
 
 		// no content type
+		//如果消息中没有content参数，则指定默认
 		if len(ct) == 0 {
 			msg.Header["Content-Type"] = DefaultContentType
 			ct = DefaultContentType
@@ -155,9 +160,11 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 		}
 
 		// set router
+		//首先设置默认路由表
 		r := Router(s.router)
 
 		// if not nil use the router specified
+		//如果自定义路由表不为空，则使用自定义路由表
 		if s.opts.Router != nil {
 			// create a wrapped function
 			handler := func(ctx context.Context, req Request, rsp interface{}) error {
@@ -165,15 +172,18 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 			}
 
 			// execute the wrapper for it
+			//逆序执行中间件
 			for i := len(s.opts.HdlrWrappers); i > 0; i-- {
 				handler = s.opts.HdlrWrappers[i-1](handler)
 			}
 
 			// set the router
+			//设定自定义路由表
 			r = rpcRouter{handler}
 		}
 
 		// serve the actual request using the request router
+		//此处才是真正的请求，服务端将解析后的结果组装成req，发送给rpcServer路由表,找到需要调用的函数
 		if err := r.ServeRequest(ctx, request, response); err != nil {
 			// write an error response
 			err = rcodec.Write(&codec.Message{
@@ -253,26 +263,28 @@ func (s *rpcServer) Handle(h Handler) error {
 func (s *rpcServer) NewSubscriber(topic string, sb interface{}, opts ...SubscriberOption) Subscriber {
 	return newSubscriber(topic, sb, opts...)
 }
-
+//检查subscribe接口的合法性，如果合法并且接口未注册，则注册至subscribers表格
 func (s *rpcServer) Subscribe(sb Subscriber) error {
-	sub, ok := sb.(*subscriber)
+	sub, ok := sb.(*subscriber)//格式转化
 	if !ok {
 		return fmt.Errorf("invalid subscriber: expected *subscriber")
 	}
 	if len(sub.handlers) == 0 {
 		return fmt.Errorf("invalid subscriber: no handler functions")
 	}
-
+	//检查subscribe接口的合法性
 	if err := validateSubscriber(sb); err != nil {
 		return err
 	}
 
 	s.Lock()
 	defer s.Unlock()
+	//检查对应的方法是否已经存在
 	_, ok = s.subscribers[sub]
 	if ok {
 		return fmt.Errorf("subscriber %v already exists", s)
 	}
+	//如果没有存在，则注册到subscribers列表
 	s.subscribers[sub] = nil
 	return nil
 }
@@ -481,6 +493,7 @@ func (s *rpcServer) Start() error {
 	config := s.Options()
 
 	// start listening on the transport
+	//启动Transport监听，用于同步发送
 	ts, err := config.Transport.Listen(config.Address)
 	if err != nil {
 		return err
@@ -495,6 +508,7 @@ func (s *rpcServer) Start() error {
 	s.Unlock()
 
 	// connect to the broker
+	//连接至Broker，用于异步发送
 	if err := config.Broker.Connect(); err != nil {
 		return err
 	}
@@ -504,10 +518,12 @@ func (s *rpcServer) Start() error {
 	log.Logf("Broker [%s] Connected to %s", bname, config.Broker.Address())
 
 	// use RegisterCheck func before register
+	//注册前进行注册检查
 	if err = s.opts.RegisterCheck(s.opts.Context); err != nil {
 		log.Logf("Server %s-%s register check error: %s", config.Name, config.Id, err)
 	} else {
 		// announce self to the world
+		//如果检查通过，就注册服务
 		if err = s.Register(); err != nil {
 			log.Logf("Server %s-%s register error: %s", config.Name, config.Id, err)
 		}
@@ -518,6 +534,7 @@ func (s *rpcServer) Start() error {
 	go func() {
 		for {
 			// listen for connections
+			//接收客户端的连接，此处的ServeConn逻辑是关键
 			err := ts.Accept(s.ServeConn)
 
 			// TODO: listen for messages
@@ -545,6 +562,7 @@ func (s *rpcServer) Start() error {
 		t := new(time.Ticker)
 
 		// only process if it exists
+		//如果服务存活，则开启心跳时钟
 		if s.opts.RegisterInterval > time.Duration(0) {
 			// new ticker
 			t = time.NewTicker(s.opts.RegisterInterval)
@@ -557,6 +575,7 @@ func (s *rpcServer) Start() error {
 		for {
 			select {
 			// register self on interval
+			//每个心跳时钟周期，进行一次健康检查，如果健康检查失败，注销服务；否则再次注册以保活
 			case <-t.C:
 				s.RLock()
 				registered := s.registered
@@ -579,7 +598,7 @@ func (s *rpcServer) Start() error {
 				break Loop
 			}
 		}
-
+		//服务结束后，注销服务，然后断开Transport连接以及Broker连接
 		// deregister self
 		if err := s.Deregister(); err != nil {
 			log.Logf("Server %s-%s deregister error: %s", config.Name, config.Id, err)
