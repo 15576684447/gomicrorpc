@@ -96,12 +96,15 @@ func configure(c *consulRegistry, opts ...registry.Option) {
 
 	// check if there are any addrs
 	if len(c.opts.Addrs) > 0 {
+		//[ip]:port或者ip:port
 		addr, port, err := net.SplitHostPort(c.opts.Addrs[0])
+		//如果只是缺少port,指定默认port为8500
 		if ae, ok := err.(*net.AddrError); ok && ae.Err == "missing port in address" {
 			port = "8500"
 			addr = c.opts.Addrs[0]
 			config.Address = fmt.Sprintf("%s:%s", addr, port)
 		} else if err == nil {
+			//否则使用指定的port
 			config.Address = fmt.Sprintf("%s:%s", addr, port)
 		}
 	}
@@ -111,6 +114,7 @@ func configure(c *consulRegistry, opts ...registry.Option) {
 	}
 
 	// requires secure connection?
+	//指定https传输方式
 	if c.opts.Secure || c.opts.TLSConfig != nil {
 
 		config.Scheme = "https"
@@ -119,14 +123,17 @@ func configure(c *consulRegistry, opts ...registry.Option) {
 	}
 
 	// set timeout
+	//http设置超时
 	if c.opts.Timeout > 0 {
 		config.HttpClient.Timeout = c.opts.Timeout
 	}
 
 	// create the client
+	//创建Client
 	client, _ := consul.NewClient(config)
 
 	// set address/client
+	//设置consulRegistry的Address与Client参数
 	c.Address = config.Address
 	c.Client = client
 }
@@ -142,11 +149,12 @@ func (c *consulRegistry) Deregister(s *registry.Service) error {
 	}
 
 	// delete our hash and time check of the service
+	//从map中删除服务与健康检查时间
 	c.Lock()
 	delete(c.register, s.Name)
 	delete(c.lastChecked, s.Name)
 	c.Unlock()
-
+	//同时从consul注销服务
 	node := s.Nodes[0]
 	return c.Client.Agent().ServiceDeregister(node.Id)
 }
@@ -163,7 +171,7 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 	for _, o := range opts {
 		o(&options)
 	}
-
+	//从ctx中获取checkInterval参数
 	if c.opts.Context != nil {
 		if tcpCheckInterval, ok := c.opts.Context.Value("consul_tcp_check").(time.Duration); ok {
 			regTCPCheck = true
@@ -172,6 +180,7 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 	}
 
 	// create hash of service; uint64
+	//哈希化Service
 	h, err := hash.Hash(s, nil)
 	if err != nil {
 		return err
@@ -182,18 +191,25 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 
 	// get existing hash and last checked time
 	c.Lock()
+	//查看服务是否已经存在
 	v, ok := c.register[s.Name]
+	//查看服务最近一次Checked
 	lastChecked := c.lastChecked[s.Name]
 	c.Unlock()
 
 	// if it's already registered and matches then just pass the check
+	//如果服务已经注册
 	if ok && v == h {
+		//如果未开启定时健康检查，则需要手动确认下服务是否健康
 		if options.TTL == time.Duration(0) {
 			// ensure that our service hasn't been deregistered by Consul
+			//获取注销TTL，最少为1分钟，查看服务距离上次Check间隔是否大于该TTL，如果还没超出间隔，说明服务健康，直接返回
 			if time.Since(lastChecked) <= getDeregisterTTL(regInterval) {
 				return nil
 			}
+			//如果服务距离上次Check间隔大于注销TTL，进行健康检查一次
 			services, _, err := c.Client.Health().Checks(s.Name, c.queryOptions)
+			//如果检查通过，且服务中包含本次待注册的服务，返回
 			if err == nil {
 				for _, v := range services {
 					if v.ServiceID == node.Id {
@@ -204,6 +220,8 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 		} else {
 			// if the err is nil we're all good, bail out
 			// if not, we don't know what the state is, so full re-register
+			//如果之前使能健康检查，说明此时服务健康，无需再次检查，将服务的TTL周期检查设置为通过
+			//如果设置出错，那么此时服务状态是未知的，则需要重新注册该服务，继续往下走
 			if err := c.Client.Agent().PassTTL("service:"+node.Id, ""); err == nil {
 				return nil
 			}
@@ -211,15 +229,17 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 	}
 
 	// encode the tags
+	//编码，json化后再编码
 	tags := encodeMetadata(node.Metadata)
 	tags = append(tags, encodeEndpoints(s.Endpoints)...)
 	tags = append(tags, encodeVersion(s.Version)...)
 
 	var check *consul.AgentServiceCheck
-
+	//如果使能了Check
 	if regTCPCheck {
+		//获取注销TTL
 		deregTTL := getDeregisterTTL(regInterval)
-
+		//创建Check参数
 		check = &consul.AgentServiceCheck{
 			TCP:                            node.Address,
 			Interval:                       fmt.Sprintf("%v", regInterval),
@@ -227,6 +247,7 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 		}
 
 		// if the TTL is greater than 0 create an associated check
+		//如果TTL选项>0，也创建对应的Check参数
 	} else if options.TTL > time.Duration(0) {
 		deregTTL := getDeregisterTTL(options.TTL)
 
@@ -240,6 +261,7 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 	port, _ := strconv.Atoi(pt)
 
 	// register the service
+	//初始化服务注册结构体
 	asr := &consul.AgentServiceRegistration{
 		ID:      node.Id,
 		Name:    s.Name,
@@ -255,23 +277,26 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 			Native: true,
 		}
 	}
-
+	//正式注册服务到consul
 	if err := c.Client.Agent().ServiceRegister(asr); err != nil {
 		return err
 	}
 
 	// save our hash and time check of the service
 	c.Lock()
+	//将服务以及最近一次Check时间更新到consulRegistry结构体中
 	c.register[s.Name] = h
 	c.lastChecked[s.Name] = time.Now()
 	c.Unlock()
 
 	// if the TTL is 0 we don't mess with the checks
+	//如果TTL为0，则默认不检查，返回
 	if options.TTL == time.Duration(0) {
 		return nil
 	}
 
 	// pass the healthcheck
+	//否则，设置服务状态为健康
 	return c.Client.Agent().PassTTL("service:"+node.Id, "")
 }
 

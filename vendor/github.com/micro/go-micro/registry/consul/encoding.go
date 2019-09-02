@@ -95,6 +95,7 @@ func decodeEndpoints(tags []string) []*registry.Endpoint {
 func encodeMetadata(md map[string]string) []string {
 	var tags []string
 	for k, v := range md {
+		//map json化后进行编码
 		if b, err := json.Marshal(map[string]string{
 			k: v,
 		}); err == nil {
