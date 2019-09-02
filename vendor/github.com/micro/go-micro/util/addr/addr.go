@@ -86,6 +86,7 @@ func Extract(addr string) (string, error) {
 }
 
 // IPs returns all known ips
+//获取所有可用IP
 func IPs() []string {
 	ifaces, err := net.Interfaces()
 	if err != nil {

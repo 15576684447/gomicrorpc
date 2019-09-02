@@ -11,7 +11,7 @@ import (
 type Transport interface {
 	Init(...Option) error
 	Options() Options
-	Dial(addr string, opts ...DialOption) (Client, error)
+	Dial(addr string, opts ...DialOption) (Client, error)//获取可用连接，返回Client结构体，包含Socket
 	Listen(addr string, opts ...ListenOption) (Listener, error)
 	String() string
 }

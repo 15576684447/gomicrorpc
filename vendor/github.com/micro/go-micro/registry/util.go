@@ -84,9 +84,13 @@ func Copy(current []*Service) []*Service {
 }
 
 // Merge merges two lists of services and returns a new copy
+//将两个Service融合为一个Service
 func Merge(olist []*Service, nlist []*Service) []*Service {
 	var srv []*Service
-
+	//融合规则:
+	//遍历new list，并将每个new list与所有old list对比
+	//如果Version相同，则在old Service的copy版本中添加new Service的Nodes(只融合Nodes)，然后添加到srv
+	//如果Version不相同，将old Service与new Service同时添加到srv
 	for _, n := range nlist {
 		var seen bool
 		for _, o := range olist {
@@ -116,6 +120,7 @@ func Merge(olist []*Service, nlist []*Service) []*Service {
 }
 
 // Remove removes services and returns a new copy
+//删除Service节点: 遍历old节点，如果Version与待删除的节点不同，重新放回; 否则舍弃
 func Remove(old, del []*Service) []*Service {
 	var services []*Service
 

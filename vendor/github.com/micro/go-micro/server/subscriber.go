@@ -32,7 +32,9 @@ type subscriber struct {
 	endpoints  []*registry.Endpoint
 	opts       SubscriberOptions
 }
-
+//解析接口的方法以及参数
+//如果是函数，则解析函数名以及其具体参数，得到handler表以及endpoint表
+//如果是对象，则解析对象名以及其所有方法的方法名以及方法的参数具体信息，得到handler表以及endpoint表
 func newSubscriber(topic string, sub interface{}, opts ...SubscriberOption) Subscriber {
 	options := SubscriberOptions{
 		AutoAck: true,
@@ -44,7 +46,7 @@ func newSubscriber(topic string, sub interface{}, opts ...SubscriberOption) Subs
 
 	var endpoints []*registry.Endpoint
 	var handlers []*handler
-
+	//如果接口类型反射为函数类型，解析其方法和输入参数以及Context
 	if typ := reflect.TypeOf(sub); typ.Kind() == reflect.Func {
 		h := &handler{
 			method: reflect.ValueOf(sub),
@@ -57,21 +59,23 @@ func newSubscriber(topic string, sub interface{}, opts ...SubscriberOption) Subs
 			h.ctxType = typ.In(0)
 			h.reqType = typ.In(1)
 		}
-
+		//添加构造的handler
 		handlers = append(handlers, h)
-
+		//添加构造的endpoint
 		endpoints = append(endpoints, &registry.Endpoint{
 			Name:    "Func",
+			//解析反射函数的具体方法以及具体参数类型(解析到基本类型或者最多解析3层)
 			Request: extractSubValue(typ),
 			Metadata: map[string]string{
 				"topic":      topic,
 				"subscriber": "true",
 			},
 		})
-	} else {
+	} else {//如果接口不是函数，可能是对象的方法集合，则解析对象名以及对象方法集合的所有函数信息
+		//获取对象及其对象名
 		hdlr := reflect.ValueOf(sub)
 		name := reflect.Indirect(hdlr).Type().Name()
-
+		//遍历对象所有方法，解析其方法名以及输入参数，并递归解析参数至基本类型或者最多3层
 		for m := 0; m < typ.NumMethod(); m++ {
 			method := typ.Method(m)
 			h := &handler{
@@ -90,6 +94,7 @@ func newSubscriber(topic string, sub interface{}, opts ...SubscriberOption) Subs
 
 			endpoints = append(endpoints, &registry.Endpoint{
 				Name:    name + "." + method.Name,
+				//解析方法的具体参数，具体到最基本类型或者最多3层
 				Request: extractSubValue(method.Type),
 				Metadata: map[string]string{
 					"topic":      topic,
@@ -109,7 +114,7 @@ func newSubscriber(topic string, sub interface{}, opts ...SubscriberOption) Subs
 		opts:       options,
 	}
 }
-
+//根据subscribe接口(可能为函数类型或者对象),检查方法名，输入输出参数列表以及返回值是否符合要求
 func validateSubscriber(sub Subscriber) error {
 	//反射获取类型
 	typ := reflect.TypeOf(sub.Subscriber())

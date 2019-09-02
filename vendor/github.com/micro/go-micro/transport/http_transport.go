@@ -445,10 +445,12 @@ func (h *httpTransport) Dial(addr string, opts ...DialOption) (Client, error) {
 			}
 		}
 		config.NextProtos = []string{"http/1.1"}
+		//获取可用连接
 		conn, err = newConn(func(addr string) (net.Conn, error) {
 			return tls.DialWithDialer(&net.Dialer{Timeout: dopts.Timeout}, "tcp", addr, config)
 		})(addr)
 	} else {
+		//获取可用连接
 		conn, err = newConn(func(addr string) (net.Conn, error) {
 			return net.DialTimeout("tcp", addr, dopts.Timeout)
 		})(addr)
@@ -488,8 +490,10 @@ func (h *httpTransport) Listen(addr string, opts ...ListenOption) (Listener, err
 				hosts := []string{addr}
 
 				// check if its a valid host:port
+				//获取host
 				if host, _, err := net.SplitHostPort(addr); err == nil {
 					if len(host) == 0 {
+						//如果host为空，获取主机的所有host
 						hosts = maddr.IPs()
 					} else {
 						hosts = []string{host}
@@ -497,21 +501,23 @@ func (h *httpTransport) Listen(addr string, opts ...ListenOption) (Listener, err
 				}
 
 				// generate a certificate
+				//为主机生成证书
 				cert, err := mls.Certificate(hosts...)
 				if err != nil {
 					return nil, err
 				}
 				config = &tls.Config{Certificates: []tls.Certificate{cert}}
 			}
+			//监听连接
 			return tls.Listen("tcp", addr, config)
 		}
-
+		//解析addr，并调用fn函数，测试哪个IP:port可行，返回对应的Listener
 		l, err = mnet.Listen(addr, fn)
 	} else {
 		fn := func(addr string) (net.Listener, error) {
 			return net.Listen("tcp", addr)
 		}
-
+		//解析addr，并调用fn函数，测试哪个IP:port可行，返回对应的Listener
 		l, err = mnet.Listen(addr, fn)
 	}
 
