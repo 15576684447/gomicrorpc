@@ -38,7 +38,7 @@ func newConsulWatcher(cr *consulRegistry, opts ...registry.WatchOption) (registr
 		watchers: make(map[string]*watch.Plan),
 		services: make(map[string][]*registry.Service),
 	}
-
+	//发起一个watch请求，返回watch plan
 	wp, err := watch.Parse(map[string]interface{}{"type": "services"})
 	if err != nil {
 		return nil, err
@@ -193,16 +193,19 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 	}
 
 	// add new watchers
+	//将要监听的服务加入到watchers
 	for service, _ := range services {
 		// Filter on watch options
 		// wo.Service: Only watch services we care about
+		//如果watch option指定了要监听的服务，则只监听对应服务，否则监听所有服务
 		if len(cw.wo.Service) > 0 && service != cw.wo.Service {
 			continue
 		}
-
+		//如果该服务已经被监听，则不需要再次加入
 		if _, ok := cw.watchers[service]; ok {
 			continue
 		}
+		//加入服务到监听列表
 		wp, err := watch.Parse(map[string]interface{}{
 			"type":    "service",
 			"service": service,
@@ -210,13 +213,16 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 		if err == nil {
 			wp.Handler = cw.serviceHandler
 			go wp.RunWithClientAndLogger(cw.r.Client, log.New(os.Stderr, "", log.LstdFlags))
+			//加入到consulWatcher
 			cw.watchers[service] = wp
+			//新建一个create registry.Result命令到管道，异步处理命令
 			cw.next <- &registry.Result{Action: "create", Service: &registry.Service{Name: service}}
 		}
 	}
 
 	cw.RLock()
 	// make a copy
+	//对consulWatcher中的services进行备份
 	rservices := make(map[string][]*registry.Service)
 	for k, v := range cw.services {
 		rservices[k] = v
@@ -225,28 +231,35 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 
 	// remove unknown services from registry
 	// save the things we want to delete
+	//用于暂存被删除的服务
 	deleted := make(map[string][]*registry.Service)
-
+	//遍历注册表，删除状态未知的服务，删除后的service暂存于deleted中
 	for service, _ := range rservices {
 		if _, ok := services[service]; !ok {
 			cw.Lock()
 			// save this before deleting
 			deleted[service] = cw.services[service]
+			//从consulWatcher中删除状态未知的服务
 			delete(cw.services, service)
 			cw.Unlock()
 		}
 	}
 
 	// remove unknown services from watchers
+	//遍历watchers，删除状态未知的服务
 	for service, w := range cw.watchers {
 		if _, ok := services[service]; !ok {
+			//停止服务监听
 			w.Stop()
+			//从map中删除
 			delete(cw.watchers, service)
+			//删除服务的所有节点
 			for _, oldService := range deleted[service] {
 				// send a delete for the service nodes that we're removing
 				cw.next <- &registry.Result{Action: "delete", Service: oldService}
 			}
 			// sent the empty list as the last resort to indicate to delete the entire service
+			//删除空节点服务
 			cw.next <- &registry.Result{Action: "delete", Service: &registry.Service{Name: service}}
 		}
 	}
