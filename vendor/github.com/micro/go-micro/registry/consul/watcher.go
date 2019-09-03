@@ -288,7 +288,8 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 		}
 	}
 }
-
+//该函数被rcache调用，将数据存储在缓存中，每次registry.Result后，就会在缓存中update
+//cache的watch函数会一直循环调用，而Next函数是一个阻塞函数，管道中有命令才会返回
 func (cw *consulWatcher) Next() (*registry.Result, error) {
 	select {
 	case <-cw.exit:
