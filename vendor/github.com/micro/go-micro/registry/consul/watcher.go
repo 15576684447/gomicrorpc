@@ -38,22 +38,24 @@ func newConsulWatcher(cr *consulRegistry, opts ...registry.WatchOption) (registr
 		watchers: make(map[string]*watch.Plan),
 		services: make(map[string][]*registry.Service),
 	}
-	//发起一个watch请求，返回watch plan
+	//parse一个watch plan父节点，不包含任何服务，仅用于监听服务，并注册handle函数，用于监听服务端的数据并执行
 	wp, err := watch.Parse(map[string]interface{}{"type": "services"})
 	if err != nil {
 		return nil, err
 	}
-
+	//父节点watch plan的handle，接收consul服务器数据，解析服务
 	wp.Handler = cw.handle
 	go wp.RunWithClientAndLogger(cr.Client, log.New(os.Stderr, "", log.LstdFlags))
 	cw.wp = wp
 
 	return cw, nil
 }
-//更新consulWatcher中的服务
+//serviceHandler，负责服务具体细节变化的处理，如服务Node的变动等
+//更新consulWatcher中的service服务
 //对比老服务consulWatcher与新服务data，如果有新的服务加入，则创建
 //如果服务存在，但是需要更新节点，则更新
 //如果新服务中删除了部分老服务，则删除
+//该handle作为服务具体细节变动的handle，具体解析服务内部细节的变动，如Node的增删等
 func (cw *consulWatcher) serviceHandler(idx uint64, data interface{}) {
 	//类型强转
 	entries, ok := data.([]*api.ServiceEntry)
@@ -201,8 +203,9 @@ func (cw *consulWatcher) serviceHandler(idx uint64, data interface{}) {
 	cw.services[serviceName] = newServices
 	cw.Unlock()
 }
+//consulWatcher handle，负责服务watch plan处理，如为新服务增加watch plan及其ServiceHandler，或者为注销的服务删除对应的watch plan
 //根据传入的新服务，更新consulWatcher内容
-//如果有新的服务，添加
+//如果有新的服务，为其添加watch plan
 //如果老服务不再使用，删除consulWatcher中对应的watchers和services
 func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 	//获取需要watch的新服务
@@ -225,14 +228,14 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 			continue
 		}
 		//加入服务到监听列表
-		//创建watch plan
+		//创建具体服务的watch plan
 		wp, err := watch.Parse(map[string]interface{}{
 			"type":    "service",
 			"service": service,
 		})
 		//添加新服务到consulWatcher，并为服务添加watch plan以及handler，同步到cache
 		if err == nil {
-			//更新监听服务watch plan的handler
+			//为每个新服务的watch plan注册一个服务serviceHandler，用于监听具体服务的变化
 			wp.Handler = cw.serviceHandler
 			go wp.RunWithClientAndLogger(cw.r.Client, log.New(os.Stderr, "", log.LstdFlags))
 			//加入到consulWatcher
@@ -253,7 +256,7 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 
 	// remove unknown services from registry
 	// save the things we want to delete
-	//用于暂存被删除的服务
+	//用于暂存被删除的服务，在删除watcher时用于获取对应应该删除的服务
 	deleted := make(map[string][]*registry.Service)
 	//遍历老服务，查看哪些在新服务中已经不再使用，则删除，删除后的service暂存于deleted中
 	//删除cw.services
@@ -275,9 +278,9 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 		if _, ok := services[service]; !ok {
 			//停止服务监听
 			w.Stop()
-			//从watch map中删除
+			//从watch map中删除对应服务的watch plan
 			delete(cw.watchers, service)
-			//顺便删除老服务中对应的service服务
+			//从deleted中获取该watch plan对应的service，异步删除其在cache中的缓存
 			for _, oldService := range deleted[service] {
 				// send a delete for the service nodes that we're removing
 				cw.next <- &registry.Result{Action: "delete", Service: oldService}
