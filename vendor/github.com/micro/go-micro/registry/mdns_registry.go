@@ -59,10 +59,11 @@ func (m *mdnsRegistry) Options() Options {
 func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error {
 	m.Lock()
 	defer m.Unlock()
-
+	//检查服务是否已经存在，不存在则新建mdns服务节点
 	entries, ok := m.services[service.Name]
 	// first entry, create wildcard used for list queries
 	if !ok {
+		//创建节点，检查参数，如果参数可选并且缺失，则使用默认参数
 		s, err := mdns.NewMDNSService(
 			service.Name,
 			"_services",
@@ -75,20 +76,22 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 		if err != nil {
 			return err
 		}
-
+		//新建mdns服务器，建立IPV4或者IPV6组内监听，接收组内广播或者单播，根据包的类型区分；并且通过probe函数向组内发送本服务信息
 		srv, err := mdns.NewServer(&mdns.Config{Zone: &mdns.DNSSDService{s}})
 		if err != nil {
 			return err
 		}
 
 		// append the wildcard entry
+		//添加mdnsEntry，此时不指定id，后面指定
 		entries = append(entries, &mdnsEntry{id: "*", node: srv})
 	}
 
 	var gerr error
-
+	//遍历该服务的Nodes
 	for _, node := range service.Nodes {
 		// create hash of service; uint64
+		//hash化node
 		h, err := hash.Hash(node, nil)
 		if err != nil {
 			gerr = err
@@ -97,7 +100,7 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 
 		var seen bool
 		var e *mdnsEntry
-
+		//查看待注册的service节点在mdnsRegistry.services中是否已经存在
 		for _, entry := range entries {
 			if node.Id == entry.id {
 				seen = true
@@ -107,16 +110,19 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 		}
 
 		// already registered, continue
+		//如果存在并且id的hash值也一样，说明是同一个服务，跳过该node检查
 		if seen && e.hash == h {
 			continue
 			// hash doesn't match, shutdown
+			//如果仅仅是id相同，但是hash值不同，说明不匹配，关闭旧的node
 		} else if seen {
 			e.node.Shutdown()
 			// doesn't exist
 		} else {
+			//如果是新建的mdnsEntry节点，因为初始指定为*，所以会在此处统一指定hash id值
 			e = &mdnsEntry{hash: h}
 		}
-
+		//encode服务信息进mdnsTxt
 		txt, err := encode(&mdnsTxt{
 			Service:   service.Name,
 			Version:   service.Version,
@@ -129,7 +135,7 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 			continue
 		}
 
-		//
+		//取出ip和port
 		host, pt, err := net.SplitHostPort(node.Address)
 		if err != nil {
 			gerr = err
@@ -138,6 +144,7 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 		port, _ := strconv.Atoi(pt)
 
 		// we got here, new node
+		//新建一个mdns 服务节点
 		s, err := mdns.NewMDNSService(
 			node.Id,
 			service.Name,
@@ -151,7 +158,7 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 			gerr = err
 			continue
 		}
-
+		//注册新的mdns服务
 		srv, err := mdns.NewServer(&mdns.Config{Zone: s})
 		if err != nil {
 			gerr = err
@@ -160,10 +167,12 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 
 		e.id = node.Id
 		e.node = srv
+		//向该服务内新加一个mdnsEntry
 		entries = append(entries, e)
 	}
 
 	// save
+	//保存服务到本地map
 	m.services[service.Name] = entries
 
 	return gerr

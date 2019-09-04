@@ -12,12 +12,14 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
-
+//mdns预留的IPV4与IPV6地址以及其端口号
+//包括单播与广播地址
 var (
 	mdnsGroupIPv4 = net.ParseIP("224.0.0.251")
 	mdnsGroupIPv6 = net.ParseIP("ff02::fb")
 
 	// mDNS wildcard addresses
+	//组内广播地址
 	mdnsWildcardAddrIPv4 = &net.UDPAddr{
 		IP:   net.ParseIP("224.0.0.0"),
 		Port: 5353,
@@ -28,6 +30,7 @@ var (
 	}
 
 	// mDNS endpoint addresses
+	//单播地址
 	ipv4Addr = &net.UDPAddr{
 		IP:   mdnsGroupIPv4,
 		Port: 5353,
@@ -67,6 +70,7 @@ type Server struct {
 func NewServer(config *Config) (*Server, error) {
 	// Create the listeners
 	// Create wildcard connections (because :5353 can be already taken by other apps)
+	//创建udp监听
 	ipv4List, _ := net.ListenUDP("udp4", mdnsWildcardAddrIPv4)
 	ipv6List, _ := net.ListenUDP("udp6", mdnsWildcardAddrIPv6)
 	if ipv4List == nil && ipv6List == nil {
@@ -81,12 +85,15 @@ func NewServer(config *Config) (*Server, error) {
 	}
 
 	// Join multicast groups to receive announcements
+	//加入广播组接收消息
 	p1 := ipv4.NewPacketConn(ipv4List)
 	p2 := ipv6.NewPacketConn(ipv6List)
+	//设置是否自动回复，此处设置自动回复，mdns就是需要收到对方广播消息后，回复一个消息，以获取对方消息
 	p1.SetMulticastLoopback(true)
 	p2.SetMulticastLoopback(true)
-
+	//如果设置了广播绑定的interface，则使用指定的interface，否则使用系统默认的interface
 	if config.Iface != nil {
+		//使用预设的interface绑定广播监听
 		if err := p1.JoinGroup(config.Iface, &net.UDPAddr{IP: mdnsGroupIPv4}); err != nil {
 			return nil, err
 		}
@@ -94,11 +101,14 @@ func NewServer(config *Config) (*Server, error) {
 			return nil, err
 		}
 	} else {
+		//使用系统默认的Interface
 		ifaces, err := net.Interfaces()
 		if err != nil {
 			return nil, err
 		}
+		//计数绑定失败个数
 		errCount1, errCount2 := 0, 0
+		//将广播绑定到系统默认的interface
 		for _, iface := range ifaces {
 			if err := p1.JoinGroup(&iface, &net.UDPAddr{IP: mdnsGroupIPv4}); err != nil {
 				errCount1++
@@ -107,6 +117,7 @@ func NewServer(config *Config) (*Server, error) {
 				errCount2++
 			}
 		}
+		//如果全部绑定失败
 		if len(ifaces) == errCount1 && len(ifaces) == errCount2 {
 			return nil, fmt.Errorf("Failed to join multicast group on all interfaces!")
 		}
@@ -118,11 +129,13 @@ func NewServer(config *Config) (*Server, error) {
 		ipv6List:   ipv6List,
 		shutdownCh: make(chan struct{}),
 	}
-
+	//启动线程去监听udp服务
 	go s.recv(s.ipv4List)
 	go s.recv(s.ipv6List)
-
+	//对象内部计数器，初始值为0，使用Add()可以设置初始值，执行Done()会使计数值减1，使用Wait()会阻塞等待，直到计数值为0
+	//其作用是等待一个对象的所有实例全部释放完毕才结束
 	s.wg.Add(1)
+	//此处在probe函数中使用了Down()函数
 	go s.probe()
 
 	return s, nil
@@ -147,7 +160,7 @@ func (s *Server) Shutdown() error {
 	if s.ipv6List != nil {
 		s.ipv6List.Close()
 	}
-
+	//等待实例全部销毁完毕才正式退出
 	s.wg.Wait()
 	return nil
 }
@@ -165,10 +178,12 @@ func (s *Server) recv(c *net.UDPConn) {
 			return
 		}
 		s.shutdownLock.Unlock()
+		//将读取的数据写入buf，返回实际获取的字节数以及对方地址
 		n, from, err := c.ReadFrom(buf)
 		if err != nil {
 			continue
 		}
+		//解析获取的数据
 		if err := s.parsePacket(buf[:n], from); err != nil {
 			log.Printf("[ERR] mdns: Failed to handle query: %v", err)
 		}
@@ -178,6 +193,7 @@ func (s *Server) recv(c *net.UDPConn) {
 // parsePacket is used to parse an incoming packet
 func (s *Server) parsePacket(packet []byte, from net.Addr) error {
 	var msg dns.Msg
+	//解压缩数据，获得实际数据
 	if err := msg.Unpack(packet); err != nil {
 		log.Printf("[ERR] mdns: Failed to unpack packet: %v", err)
 		return err
@@ -186,11 +202,13 @@ func (s *Server) parsePacket(packet []byte, from net.Addr) error {
 	// We decided to ignore some mDNS answers for the time being
 	// See: https://tools.ietf.org/html/rfc6762#section-7.2
 	msg.Truncated = false
+	//处理请求
 	return s.handleQuery(&msg, from)
 }
 
 // handleQuery is used to handle an incoming query
 func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
+	//OPCODE必须为0
 	if query.Opcode != dns.OpcodeQuery {
 		// "In both multicast query and multicast response messages, the OPCODE MUST
 		// be zero on transmission (only standard queries are currently supported
@@ -198,6 +216,7 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 		// than zero MUST be silently ignored."  Note: OpcodeQuery == 0
 		return fmt.Errorf("mdns: received query with non-zero Opcode %v: %v", query.Opcode, *query)
 	}
+	//Response Code必须为0
 	if query.Rcode != 0 {
 		// "In both multicast query and multicast response messages, the Response
 		// Code MUST be zero on transmission.  Multicast DNS messages received with
@@ -211,6 +230,7 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 	//    record this fact, and wait for those additional Known-Answer records,
 	//    before deciding whether to respond.  If the TC bit is clear, it means
 	//    that the querying host has no additional Known Answers.
+	//支持消息截断
 	if query.Truncated {
 		return fmt.Errorf("[ERR] mdns: support for DNS requests with high truncated bit not implemented: %v", *query)
 	}
@@ -218,8 +238,11 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 	var unicastAnswer, multicastAnswer []dns.RR
 
 	// Handle each question
+	//依次处理query，区分单播还是组内广播
 	for _, q := range query.Question {
+		//区分是unicast请求还是multicast请求
 		mrecs, urecs := s.handleQuestion(q)
+		//分别添加unicast和multicast到对应列表
 		multicastAnswer = append(multicastAnswer, mrecs...)
 		unicastAnswer = append(unicastAnswer, urecs...)
 	}
@@ -234,6 +257,7 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 		}
 
 		var answer []dns.RR
+		//根据收到的类型为单播还是组内广播，设置对应的回复
 		if unicast {
 			answer = unicastAnswer
 		} else {
@@ -242,7 +266,7 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 		if len(answer) == 0 {
 			return nil
 		}
-
+		//生成resp信息
 		return &dns.Msg{
 			MsgHdr: dns.MsgHdr{
 				Id: id,
@@ -276,7 +300,7 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 			Answer: answer,
 		}
 	}
-
+	//回复消息
 	if mresp := resp(false); mresp != nil {
 		if err := s.sendResponse(mresp, from); err != nil {
 			return fmt.Errorf("mdns: error sending multicast response: %v", err)
@@ -312,6 +336,7 @@ func (s *Server) handleQuestion(q dns.Question) (multicastRecs, unicastRecs []dn
 	//     In the Question Section of a Multicast DNS query, the top bit of the
 	//     qclass field is used to indicate that unicast responses are preferred
 	//     for this particular question.  (See Section 5.4.)
+	//区分请求类型为unicast或者multicast
 	if q.Qclass&(1<<15) != 0 {
 		return nil, records
 	}
@@ -327,7 +352,7 @@ func (s *Server) probe() {
 	}
 
 	name := fmt.Sprintf("%s.%s.%s.", sd.Instance, trimDot(sd.Service), trimDot(sd.Domain))
-
+	//组装query结构体
 	q := new(dns.Msg)
 	q.SetQuestion(name, dns.TypePTR)
 	q.RecursionDesired = false
@@ -356,7 +381,7 @@ func (s *Server) probe() {
 	q.Ns = []dns.RR{srv, txt}
 
 	randomizer := rand.New(rand.NewSource(time.Now().UnixNano()))
-
+	//相隔250ms发送query，一共发送3次，以probe
 	for i := 0; i < 3; i++ {
 		if err := s.SendMulticast(q); err != nil {
 			log.Println("[ERR] mdns: failed to send probe:", err.Error())
@@ -414,16 +439,20 @@ func (s *Server) SendMulticast(msg *dns.Msg) error {
 }
 
 // sendResponse is used to send a response packet
+//回复消息
 func (s *Server) sendResponse(resp *dns.Msg, from net.Addr) error {
 	// TODO(reddaly): Respect the unicast argument, and allow sending responses
 	// over multicast.
+	//装包数据
 	buf, err := resp.Pack()
 	if err != nil {
 		return err
 	}
 
 	// Determine the socket to send from
+	//解析对方地址
 	addr := from.(*net.UDPAddr)
+	//发送消息给对方
 	if addr.IP.To4() != nil {
 		_, err = s.ipv4List.WriteToUDP(buf, addr)
 		return err

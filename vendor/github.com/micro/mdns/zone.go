@@ -60,6 +60,7 @@ func validateFQDN(s string) error {
 // check to ensure that the instance name does not conflict with other instance
 // names, and, if required, select a new name.  There may also be conflicting
 // hostName A/AAAA records.
+//如果未传入domain、hostName或者ip参数，使用本地主机参数
 func NewMDNSService(instance, service, domain, hostName string, port int, ips []net.IP, txt []string) (*MDNSService, error) {
 	// Sanity check inputs
 	if instance == "" {
