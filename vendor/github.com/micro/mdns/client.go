@@ -32,6 +32,7 @@ type ServiceEntry struct {
 }
 
 // complete is used to check if we have all the info we need
+//如果同时获取地址，port以及txt信息，说明服务完整返回
 func (s *ServiceEntry) complete() bool {
 	return (s.AddrV4 != nil || s.AddrV6 != nil || s.Addr != nil) && s.Port != 0 && s.hasTXT
 }
@@ -64,6 +65,7 @@ func DefaultParams(service string) *QueryParam {
 // either read or buffer.
 func Query(params *QueryParam) error {
 	// Create a new client
+	//创建Client，实际上是新建一个udp广播句柄
 	client, err := newClient()
 	if err != nil {
 		return err
@@ -71,6 +73,7 @@ func Query(params *QueryParam) error {
 	defer client.Close()
 
 	// Set the multicast interface
+	//设置广播绑定的interface
 	if params.Interface != nil {
 		if err := client.setInterface(params.Interface, false); err != nil {
 			return err
@@ -78,10 +81,11 @@ func Query(params *QueryParam) error {
 	}
 
 	// Ensure defaults are set
+	//设置主机域名，如果未指定，用local
 	if params.Domain == "" {
 		params.Domain = "local"
 	}
-
+	//设置Context参数，主要为超时参数
 	if params.Context == nil {
 		if params.Timeout == 0 {
 			params.Timeout = time.Second
@@ -124,6 +128,7 @@ func Listen(entries chan<- *ServiceEntry, exit chan struct{}) error {
 		case <-client.closedCh:
 			return nil
 		case m := <-msgCh:
+			//根据接收的消息，如果确认返回完整服务，则发送至管道，等待进一步处理
 			e := messageToEntry(m, ip)
 			if e == nil {
 				continue
@@ -134,11 +139,13 @@ func Listen(entries chan<- *ServiceEntry, exit chan struct{}) error {
 				if e.sent {
 					continue
 				}
+				//如果获取完整服务，标记并发送至管道进一步处理
 				e.sent = true
 				entries <- e
 				ip = make(map[string]*ServiceEntry)
 			} else {
 				// Fire off a node specific query
+				//否则说明该服务没有成功返回，再请求一次
 				m := new(dns.Msg)
 				m.SetQuestion(e.Name, dns.TypePTR)
 				m.RecursionDesired = false
@@ -265,12 +272,15 @@ func (c *client) setInterface(iface *net.Interface, loopback bool) error {
 }
 
 // query is used to perform a lookup and stream results
+//发送请求
 func (c *client) query(params *QueryParam) error {
 	// Create the service name
 	serviceAddr := fmt.Sprintf("%s.%s.", trimDot(params.Service), trimDot(params.Domain))
 
 	// Start listening for response packets
+	//先设置监听
 	msgCh := make(chan *dns.Msg, 32)
+	//在接收线程中传入msg管道，用于将接收的消息传递出来，等待处理
 	go c.recv(c.ipv4UnicastConn, msgCh)
 	go c.recv(c.ipv6UnicastConn, msgCh)
 	go c.recv(c.ipv4MulticastConn, msgCh)
@@ -278,6 +288,7 @@ func (c *client) query(params *QueryParam) error {
 
 	// Send the query
 	m := new(dns.Msg)
+	//设置请求参数
 	m.SetQuestion(serviceAddr, dns.TypePTR)
 	// RFC 6762, section 18.12.  Repurposing of Top Bit of qclass in Question
 	// Section
@@ -285,37 +296,44 @@ func (c *client) query(params *QueryParam) error {
 	// In the Question Section of a Multicast DNS query, the top bit of the qclass
 	// field is used to indicate that unicast responses are preferred for this
 	// particular question.  (See Section 5.4.)
+	//如果设置了单播自动返回，则设置对应参数
 	if params.WantUnicastResponse {
 		m.Question[0].Qclass |= 1 << 15
 	}
 	m.RecursionDesired = false
+	//发送请求
 	if err := c.sendQuery(m); err != nil {
 		return err
 	}
 
 	// Map the in-progress responses
 	inprogress := make(map[string]*ServiceEntry)
-
+	//等待消息回复
 	for {
 		select {
+		//从接收函数的管道中获取返回数据
 		case resp := <-msgCh:
+			//将收到的message转换成ServiceEntry,主要解析PTR，SRV，TXT
 			inp := messageToEntry(resp, inprogress)
 			if inp == nil {
 				continue
 			}
 
 			// Check if this entry is complete
+			//检查返回是否完整
 			if inp.complete() {
 				if inp.sent {
 					continue
 				}
 				inp.sent = true
 				select {
+				//如果接收完整，则将服务发送至管道等待处理
 				case params.Entries <- inp:
 				case <-params.Context.Done():
 					return nil
 				}
 			} else {
+				//如果不完整，则针对该node，再次发送请求
 				// Fire off a node specific query
 				m := new(dns.Msg)
 				m.SetQuestion(inp.Name, dns.TypePTR)
@@ -375,6 +393,7 @@ func (c *client) recv(l *net.UDPConn, msgCh chan *dns.Msg) {
 }
 
 // ensureName is used to ensure the named node is in progress
+//确认该服务是否正在被处理，如果是，直接返回；如果不是，添加至列表
 func ensureName(inprogress map[string]*ServiceEntry, name string) *ServiceEntry {
 	if inp, ok := inprogress[name]; ok {
 		return inp
@@ -391,19 +410,21 @@ func alias(inprogress map[string]*ServiceEntry, src, dst string) {
 	srcEntry := ensureName(inprogress, src)
 	inprogress[dst] = srcEntry
 }
-
+//获取完整的ServiceEntry，包括addr，port以及txt信息
 func messageToEntry(m *dns.Msg, inprogress map[string]*ServiceEntry) *ServiceEntry {
 	var inp *ServiceEntry
 
 	for _, answer := range append(m.Answer, m.Extra...) {
 		// TODO(reddaly): Check that response corresponds to serviceAddr?
 		switch rr := answer.(type) {
+		//如果返回PTR，则获得实例名称
 		case *dns.PTR:
 			// Create new entry for this
 			inp = ensureName(inprogress, rr.Ptr)
 			if inp.complete() {
 				continue
 			}
+			//如果返回SRV，解析host和ip信息
 		case *dns.SRV:
 			// Check for a target mismatch
 			if rr.Target != rr.Hdr.Name {
@@ -417,6 +438,7 @@ func messageToEntry(m *dns.Msg, inprogress map[string]*ServiceEntry) *ServiceEnt
 			}
 			inp.Host = rr.Target
 			inp.Port = int(rr.Port)
+			//如果是TXT，解析服务具体信息，并标记hasTXT参数
 		case *dns.TXT:
 			// Pull out the txt
 			inp = ensureName(inprogress, rr.Hdr.Name)
@@ -426,6 +448,7 @@ func messageToEntry(m *dns.Msg, inprogress map[string]*ServiceEntry) *ServiceEnt
 			inp.Info = strings.Join(rr.Txt, "|")
 			inp.InfoFields = rr.Txt
 			inp.hasTXT = true
+			//对方返回的IPV4地址，通过A Record返回
 		case *dns.A:
 			// Pull out the IP
 			inp = ensureName(inprogress, rr.Hdr.Name)
@@ -434,6 +457,7 @@ func messageToEntry(m *dns.Msg, inprogress map[string]*ServiceEntry) *ServiceEnt
 			}
 			inp.Addr = rr.A // @Deprecated
 			inp.AddrV4 = rr.A
+			//对方返回的IPV6地址，通过AAAA Record
 		case *dns.AAAA:
 			// Pull out the IP
 			inp = ensureName(inprogress, rr.Hdr.Name)

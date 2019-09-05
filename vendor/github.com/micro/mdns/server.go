@@ -70,7 +70,7 @@ type Server struct {
 func NewServer(config *Config) (*Server, error) {
 	// Create the listeners
 	// Create wildcard connections (because :5353 can be already taken by other apps)
-	//创建udp监听
+	//创建udp服务监听
 	ipv4List, _ := net.ListenUDP("udp4", mdnsWildcardAddrIPv4)
 	ipv6List, _ := net.ListenUDP("udp6", mdnsWildcardAddrIPv6)
 	if ipv4List == nil && ipv6List == nil {
@@ -88,7 +88,7 @@ func NewServer(config *Config) (*Server, error) {
 	//加入广播组接收消息
 	p1 := ipv4.NewPacketConn(ipv4List)
 	p2 := ipv6.NewPacketConn(ipv6List)
-	//设置是否自动回复，此处设置自动回复，mdns就是需要收到对方广播消息后，回复一个消息，以获取对方消息
+	//设置是否回传，如果是，则收到对方数据包后，将数据拷贝一份，回传给对方
 	p1.SetMulticastLoopback(true)
 	p2.SetMulticastLoopback(true)
 	//如果设置了广播绑定的interface，则使用指定的interface，否则使用系统默认的interface
@@ -129,13 +129,14 @@ func NewServer(config *Config) (*Server, error) {
 		ipv6List:   ipv6List,
 		shutdownCh: make(chan struct{}),
 	}
-	//启动线程去监听udp服务
+	//启动服务监听线程
 	go s.recv(s.ipv4List)
 	go s.recv(s.ipv6List)
 	//对象内部计数器，初始值为0，使用Add()可以设置初始值，执行Done()会使计数值减1，使用Wait()会阻塞等待，直到计数值为0
 	//其作用是等待一个对象的所有实例全部释放完毕才结束
 	s.wg.Add(1)
-	//此处在probe函数中使用了Down()函数
+	//probe运行完毕后，会执行Down()函数
+	//向组内广播自己的服务信息，以注册自己的服务，并设置监听，自动回复应答
 	go s.probe()
 
 	return s, nil
@@ -152,6 +153,7 @@ func (s *Server) Shutdown() error {
 
 	s.shutdown = true
 	close(s.shutdownCh)
+	//广播发送注销消息
 	s.unregister()
 
 	if s.ipv4List != nil {
@@ -166,6 +168,7 @@ func (s *Server) Shutdown() error {
 }
 
 // recv is a long running routine to receive packets from an interface
+//从网络接口接收局域网内广播消息
 func (s *Server) recv(c *net.UDPConn) {
 	if c == nil {
 		return
@@ -193,7 +196,7 @@ func (s *Server) recv(c *net.UDPConn) {
 // parsePacket is used to parse an incoming packet
 func (s *Server) parsePacket(packet []byte, from net.Addr) error {
 	var msg dns.Msg
-	//解压缩数据，获得实际数据
+	//解压缩数据
 	if err := msg.Unpack(packet); err != nil {
 		log.Printf("[ERR] mdns: Failed to unpack packet: %v", err)
 		return err
@@ -207,6 +210,7 @@ func (s *Server) parsePacket(packet []byte, from net.Addr) error {
 }
 
 // handleQuery is used to handle an incoming query
+//处理请求
 func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 	//OPCODE必须为0
 	if query.Opcode != dns.OpcodeQuery {
@@ -238,11 +242,13 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 	var unicastAnswer, multicastAnswer []dns.RR
 
 	// Handle each question
-	//依次处理query，区分单播还是组内广播
+	//依次处理query，区分请求是单播还是广播
+	//单播：可能是请求对方服务，对方回复服务信息
+	//广播：可能是局域网内有设备广播注册服务或者广播发现局域网内对应服务实例
 	for _, q := range query.Question {
-		//区分是unicast请求还是multicast请求
+		//区分是单播还是广播
 		mrecs, urecs := s.handleQuestion(q)
-		//分别添加unicast和multicast到对应列表
+		//分别添加至单播列表和广播列表
 		multicastAnswer = append(multicastAnswer, mrecs...)
 		unicastAnswer = append(unicastAnswer, urecs...)
 	}
@@ -267,6 +273,7 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 			return nil
 		}
 		//生成resp信息
+		//复制内容，回复给发送方
 		return &dns.Msg{
 			MsgHdr: dns.MsgHdr{
 				Id: id,
@@ -300,12 +307,13 @@ func (s *Server) handleQuery(query *dns.Msg, from net.Addr) error {
 			Answer: answer,
 		}
 	}
-	//回复消息
+	//回复单播消息
 	if mresp := resp(false); mresp != nil {
 		if err := s.sendResponse(mresp, from); err != nil {
 			return fmt.Errorf("mdns: error sending multicast response: %v", err)
 		}
 	}
+	//回复广播消息
 	if uresp := resp(true); uresp != nil {
 		if err := s.sendResponse(uresp, from); err != nil {
 			return fmt.Errorf("mdns: error sending unicast response: %v", err)
@@ -350,9 +358,12 @@ func (s *Server) probe() {
 	if !ok {
 		return
 	}
-
+	//获取 <service>.<transport>.<domain> 作为实例
 	name := fmt.Sprintf("%s.%s.%s.", sd.Instance, trimDot(sd.Service), trimDot(sd.Domain))
-	//组装query结构体
+	//组装mDNS包信息，包括如下3部分
+	//PTR：主要包含服务实例名
+	//SRV：包含服务的实例主机名以及端口
+	//TXT：服务附加信息，关于服务更加详细的信息
 	q := new(dns.Msg)
 	q.SetQuestion(name, dns.TypePTR)
 	q.RecursionDesired = false
@@ -381,7 +392,7 @@ func (s *Server) probe() {
 	q.Ns = []dns.RR{srv, txt}
 
 	randomizer := rand.New(rand.NewSource(time.Now().UnixNano()))
-	//相隔250ms发送query，一共发送3次，以probe
+	//连续3次，间隔发送服务的mDNS包信息，以注册该服务
 	for i := 0; i < 3; i++ {
 		if err := s.SendMulticast(q); err != nil {
 			log.Println("[ERR] mdns: failed to send probe:", err.Error())
@@ -393,11 +404,13 @@ func (s *Server) probe() {
 	resp.MsgHdr.Response = true
 
 	// set for query
+	//类型为any的mDNS包主要用于查询局域网内是否有同名，如果没有，就以改名字作为自身域名
 	q.SetQuestion(name, dns.TypeANY)
 
 	resp.Answer = append(resp.Answer, s.config.Zone.Records(q.Question[0])...)
 
 	// reset
+	//PTR包用于查询局域网内对应服务实例名
 	q.SetQuestion(name, dns.TypePTR)
 
 	// From RFC6762
@@ -408,6 +421,7 @@ func (s *Server) probe() {
 	//    at least a factor of two with every response sent.
 	timeout := 1 * time.Second
 	timer := time.NewTimer(timeout)
+	//多次查询，每次间隔的时间翻倍
 	for i := 0; i < 3; i++ {
 		if err := s.SendMulticast(resp); err != nil {
 			log.Println("[ERR] mdns: failed to send announcement:", err.Error())
