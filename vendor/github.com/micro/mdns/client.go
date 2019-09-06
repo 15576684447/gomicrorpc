@@ -112,8 +112,9 @@ func Listen(entries chan<- *ServiceEntry, exit chan struct{}) error {
 	client.setInterface(nil, true)
 
 	// Start listening for response packets
+	//该管道用于传入接收线程，将接收线程接收的消息穿出，给下面的函数处理
 	msgCh := make(chan *dns.Msg, 32)
-
+	//感觉此处有错误，应该接收unicast的IPV4与IPV6，以及multicast的IPV4与IPV6
 	go client.recv(client.ipv4MulticastConn, msgCh)
 	go client.recv(client.ipv6MulticastConn, msgCh)
 	go client.recv(client.ipv4MulticastConn, msgCh)
@@ -128,13 +129,14 @@ func Listen(entries chan<- *ServiceEntry, exit chan struct{}) error {
 		case <-client.closedCh:
 			return nil
 		case m := <-msgCh:
-			//根据接收的消息，如果确认返回完整服务，则发送至管道，等待进一步处理
+			//判断消息接收是否完整，一个完整的服务消息应该包含PTR，SRV以及TXT
 			e := messageToEntry(m, ip)
 			if e == nil {
 				continue
 			}
 
 			// Check if this entry is complete
+			//如果服务返回完整，发送到entries管道，传到外面处理
 			if e.complete() {
 				if e.sent {
 					continue
@@ -262,7 +264,7 @@ func (c *client) setInterface(iface *net.Interface, loopback bool) error {
 	if err := p2.JoinGroup(iface, &net.UDPAddr{IP: mdnsGroupIPv6}); err != nil {
 		return err
 	}
-
+	//设置回传
 	if loopback {
 		p.SetMulticastLoopback(true)
 		p2.SetMulticastLoopback(true)

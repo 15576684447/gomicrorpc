@@ -66,7 +66,8 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 	entries, ok := m.services[service.Name]
 	// first entry, create wildcard used for list queries
 	if !ok {
-		//创建服务Entry节点，如果是非具体服务，IP=0.0.0.0,PORT=9999 ???
+		//首先注册一个服务实例，serverName作为InstantName，"_services"作为service字段，用于ListService返回
+		//没有其他信息，可以将服务实例理解为对应服务的壳，里面包含若干个该服务的Node节点
 		s, err := mdns.NewMDNSService(
 			service.Name,
 			"_services",
@@ -149,6 +150,8 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 
 		// we got here, new node
 		//具体服务信息，包括服务名，IP，port以及服务具体信息txt
+		//服务内的每个Node包含唯一的node.Id信息，Id通过将Node信息取hash值获取
+		//将id作为InstantName字段，serverName作为server字段
 		s, err := mdns.NewMDNSService(
 			node.Id,
 			service.Name,
@@ -209,7 +212,7 @@ func (m *mdnsRegistry) Deregister(service *Service) error {
 	}
 
 	// last entry is the wildcard for list queries. Remove it.
-	//如果只剩最后一个节点且id为*，仅仅是广播请求作用的，没有具体服务，移除
+	//如果只剩最后一个节点且id为*，说明是该服务的实例，只用于ListService返回，删除
 	if len(newEntries) == 1 && newEntries[0].id == "*" {
 		newEntries[0].node.Shutdown()
 		delete(m.services, service.Name)
@@ -228,6 +231,7 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 	//获取请求默认参数，并指定ctx超时参数以及服务传递管道
 	//程序将Query执行结果传入管道，并在下面的程序中等待管道中的服务返回
 	//并逐个验证，获取想要的服务，并返回
+	//GetService需要获取某个服务的详细信息，Service字段指定具体服务名，而不是向ListService那样，传入的是"_services"
 	p := mdns.DefaultParams(service)
 	// set context with timeout
 	p.Context, _ = context.WithTimeout(context.Background(), m.opts.Timeout)
@@ -240,6 +244,7 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 			select {
 			case e := <-entries:
 				// list record so skip
+				//忽略返回service字段为"_services"的服务实例，该服务用于ListSevice使用
 				if p.Service == "_services" {
 					continue
 				}
@@ -299,12 +304,12 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 
 	return services, nil
 }
-//返回都有服务，与GetService逻辑类似
+//返回服务实例列表，不需要详细信息，只要实例名即可
 func (m *mdnsRegistry) ListServices() ([]*Service, error) {
 	serviceMap := make(map[string]bool)
 	entries := make(chan *mdns.ServiceEntry, 10)
 	done := make(chan bool)
-
+	//默认参数设置为获取服务实例
 	p := mdns.DefaultParams("_services")
 	// set context with timeout
 	p.Context, _ = context.WithTimeout(context.Background(), m.opts.Timeout)
@@ -320,10 +325,12 @@ func (m *mdnsRegistry) ListServices() ([]*Service, error) {
 				if e.TTL == 0 {
 					continue
 				}
-
+				//去除entry名字中格式为.service.domain.的后缀
+				//实际解析的PTR数据包，格式为<service>.<transport>.<domain>，去除后缀后只剩服务名
 				name := strings.TrimSuffix(e.Name, "."+p.Service+"."+p.Domain+".")
 				if !serviceMap[name] {
 					serviceMap[name] = true
+					//ListServices不需要服务的详细信息，只要其服务实例名字即可
 					services = append(services, &Service{Name: name})
 				}
 			case <-p.Context.Done():
