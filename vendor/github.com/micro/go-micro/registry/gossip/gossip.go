@@ -90,8 +90,11 @@ func (ed *eventDelegate) NotifyUpdate(n *memberlist.Node) {
 }
 
 type gossipRegistry struct {
+	//消息队列，用于将消息广播至cluster，但是限制消息单次广播的节点数量
 	queue       *memberlist.TransmitLimitedQueue
+	//update消息同步管道
 	updates     chan *update
+	//事件传输管道，解析后将其附加到members列表中
 	events      chan *event
 	options     registry.Options
 	member      *memberlist.Memberlist
@@ -101,12 +104,15 @@ type gossipRegistry struct {
 	connectRetry   bool
 	connectTimeout time.Duration
 	sync.RWMutex
+	//服务注册登记表
 	services map[string][]*registry.Service
-
+	//用于publish与subscribe方法中，将服务同步到本地cache
 	watchers map[string]chan *registry.Result
 
 	mtu     int
+	//服务地址列表
 	addrs   []string
+	//保存解析后的事件
 	members map[string]int32
 	done    chan bool
 }
@@ -142,6 +148,7 @@ func configure(g *gossipRegistry, opts ...registry.Option) error {
 	}
 
 	// current address list
+	//从addrs中获取有效地址
 	curAddrs := addrs(g.options.Addrs)
 
 	// parse options
@@ -150,14 +157,17 @@ func configure(g *gossipRegistry, opts ...registry.Option) error {
 	}
 
 	// new address list
+	//从设置后的地址中获取有效地址
 	newAddrs := addrs(g.options.Addrs)
 
 	// no new nodes and existing member. no configure
+	//如果没有新地址，返回
 	if (len(newAddrs) == len(curAddrs)) && g.member != nil {
 		return nil
 	}
 
 	// shutdown old member
+	//关闭旧的member
 	g.Stop()
 
 	// lock internals
@@ -170,6 +180,7 @@ func configure(g *gossipRegistry, opts ...registry.Option) error {
 	curAddrs = newAddrs
 
 	// create a new default config
+	//新建默认config
 	c := memberlist.DefaultLocalConfig()
 
 	// sane good default options
@@ -178,6 +189,7 @@ func configure(g *gossipRegistry, opts ...registry.Option) error {
 	c.ProtocolVersion = 4        // suport latest stable features
 
 	// set config from options
+	//如果ctx中传入config，则使用ctx配置
 	if config, ok := g.options.Context.Value(configKey{}).(*memberlist.Config); ok && config != nil {
 		c = config
 	}
@@ -236,6 +248,7 @@ func configure(g *gossipRegistry, opts ...registry.Option) error {
 	}
 
 	// create a queue
+	//queue的node数量由curAddrs总数量决定
 	queue := &memberlist.TransmitLimitedQueue{
 		NumNodes: func() int {
 			return len(curAddrs)
@@ -244,22 +257,25 @@ func configure(g *gossipRegistry, opts ...registry.Option) error {
 	}
 
 	// set the delegate
+	//设置成员
 	c.Delegate = &delegate{
 		updates: g.updates,
 		queue:   queue,
 	}
 
 	if g.connectRetry {
+		//设置event成员
 		c.Events = &eventDelegate{
 			events: g.events,
 		}
 	}
 	// create the memberlist
+	//从config中创建memberlist
 	m, err := memberlist.Create(c)
 	if err != nil {
 		return err
 	}
-
+	//为每个member设置地址
 	if len(curAddrs) > 0 {
 		for _, addr := range curAddrs {
 			g.members[addr] = nodeActionUnknown
@@ -269,6 +285,7 @@ func configure(g *gossipRegistry, opts ...registry.Option) error {
 	g.tcpInterval = c.PushPullInterval
 	g.addrs = curAddrs
 	g.queue = queue
+	//初始化成员
 	g.member = m
 	g.interval = c.GossipInterval
 
@@ -408,10 +425,13 @@ func (g *gossipRegistry) connect(addrs []string) error {
 	defer ticker.Stop()
 
 	fn := func() (int, error) {
+		//该节点通过与其他所有节点建立联系，并同步数据，以此来加入cluster
+		//函数返回建立连接的节点数与错误结果，如果返回错误，则加入cluster失败
 		return g.member.Join(addrs)
 	}
 
 	// don't wait for first try
+	//如果加入cluster成功，返回，否则继续
 	if _, err := fn(); err == nil {
 		return nil
 	}
@@ -430,6 +450,7 @@ func (g *gossipRegistry) connect(addrs []string) error {
 			return fmt.Errorf("[gossip] connect timeout %v", g.addrs)
 		// got a tick, try to connect
 		case <-ticker.C:
+			//每秒检查一次是否加入cluster成功
 			if _, err := fn(); err == nil {
 				log.Logf("[gossip] connect success for %v", g.addrs)
 				return nil
@@ -441,7 +462,7 @@ func (g *gossipRegistry) connect(addrs []string) error {
 
 	return nil
 }
-
+//将消息发送至registry.Result管道
 func (g *gossipRegistry) publish(action string, services []*registry.Service) {
 	g.RLock()
 	for _, sub := range g.watchers {
@@ -453,7 +474,7 @@ func (g *gossipRegistry) publish(action string, services []*registry.Service) {
 	}
 	g.RUnlock()
 }
-
+//从registry.Result管道中读取消息
 func (g *gossipRegistry) subscribe() (chan *registry.Result, chan bool) {
 	next := make(chan *registry.Result, 10)
 	exit := make(chan bool)
@@ -483,7 +504,9 @@ func (g *gossipRegistry) Stop() error {
 		close(g.done)
 		g.Lock()
 		if g.member != nil {
+			//广播离开的消息，但是后台监听不会关闭，仍然参与网络节点更新，直到离开的消息全部传达完毕或者超时退出
 			g.member.Leave(g.interval * 2)
+			//清除全部后台监听
 			g.member.Shutdown()
 			g.member = nil
 		}
@@ -493,6 +516,7 @@ func (g *gossipRegistry) Stop() error {
 }
 
 // connectLoop attempts to reconnect to the memberlist
+//每隔1秒检查memberlist事件，搜集其nodeActionLeave事件，如果有服务断开与cluster连接，将其重连至cluster
 func (g *gossipRegistry) connectLoop() {
 	// try every second
 	ticker := time.NewTicker(1 * time.Second)
@@ -579,6 +603,7 @@ func (g *gossipRegistry) expiryLoop(updates *updates) {
 }
 
 // process member events
+//处理memberlist对应的事件
 func (g *gossipRegistry) eventLoop() {
 	g.RLock()
 	done := g.done
@@ -588,6 +613,7 @@ func (g *gossipRegistry) eventLoop() {
 		// return when done
 		case <-done:
 			return
+			//解析事件对应的服务，并将其添加至memberlist列表，等待connectLoop处理重连事件
 		case ev := <-g.events:
 			// TODO: nonblocking update
 			g.Lock()
@@ -605,21 +631,26 @@ func (g *gossipRegistry) run() {
 	}
 
 	// expiry loop
+	//服务生命周期检测，如果超出生存周期，则删除服务
 	go g.expiryLoop(updates)
 
 	// event loop
+	//处理event，解析event所属member，并将其添加到对应服务
 	go g.eventLoop()
 
 	g.RLock()
 	// connect loop
+	//如果设置重连，则将离线的服务重新连接至cluster
 	if g.connectRetry {
 		go g.connectLoop()
 	}
 	g.RUnlock()
 
 	// process the updates
+	//处理update服务
 	for u := range g.updates {
 		switch u.Update.Action {
+		//服务新建，如果之前没有，则直接创建；否则融合服务
 		case actionTypeCreate:
 			g.Lock()
 			if service, ok := g.services[u.Service.Name]; !ok {
@@ -631,9 +662,12 @@ func (g *gossipRegistry) run() {
 			g.Unlock()
 
 			// publish update to watchers
+			//发布消息，实则将消息写入watch的registry.Result管道，另外一端是subscribe
+			//将update消息发送至watch的registry.Result管道，通知cache更新
 			go g.publish(actionTypeString(actionTypeCreate), []*registry.Service{u.Service})
 
 			// we need to expire the node at some point in the future
+			//如果Expires参数生效，则将其添加至expiryLoop检查中，定期检查服务是否失效，失效则删除
 			if u.Update.Expires > 0 {
 				// create a hash of this service
 				if hash, err := hashstructure.Hash(u.Service, nil); err == nil {
@@ -644,6 +678,7 @@ func (g *gossipRegistry) run() {
 			}
 		case actionTypeDelete:
 			g.Lock()
+			//删除服务，如果服务事先存在，返回删除后剩余节点；如果剩余节点为空，删除整个服务；否则将剩余节点放回即可
 			if service, ok := g.services[u.Service.Name]; ok {
 				if services := registry.Remove(service, []*registry.Service{u.Service}); len(services) == 0 {
 					delete(g.services, u.Service.Name)
@@ -654,9 +689,11 @@ func (g *gossipRegistry) run() {
 			g.Unlock()
 
 			// publish update to watchers
+			//发布消息，实则将消息写入watch的registry.Result管道，另外一端是subscribe
 			go g.publish(actionTypeString(actionTypeDelete), []*registry.Service{u.Service})
 
 			// delete from expiry checks
+			//从expiryLoop检查中删除对应服务
 			if hash, err := hashstructure.Hash(u.Service, nil); err == nil {
 				updates.Lock()
 				delete(updates.services, hash)
@@ -671,12 +708,14 @@ func (g *gossipRegistry) run() {
 			g.RLock()
 
 			// push all services through the sync chan
+			//通过sync管道同步所有服务
 			for _, service := range g.services {
 				for _, srv := range service {
 					u.sync <- srv
 				}
 
 				// publish to watchers
+				//发布消息，实则将消息写入watch的registry.Result管道，另外一端是subscribe
 				go g.publish(actionTypeString(actionTypeCreate), service)
 			}
 
@@ -703,9 +742,11 @@ func (g *gossipRegistry) Register(s *registry.Service, opts ...registry.Register
 	}
 
 	g.Lock()
+	//如果本地services Map中不存在服务，新建
 	if service, ok := g.services[s.Name]; !ok {
 		g.services[s.Name] = []*registry.Service{s}
 	} else {
+		//否则与已有的服务合并
 		g.services[s.Name] = registry.Merge(service, []*registry.Service{s})
 	}
 	g.Unlock()
@@ -728,13 +769,14 @@ func (g *gossipRegistry) Register(s *registry.Service, opts ...registry.Register
 		},
 		Data: b,
 	}
-
+	//向cluster内广播一个update数据包
 	g.queue.QueueBroadcast(&broadcast{
 		update: up,
 		notify: nil,
 	})
 
 	// send update to local watchers
+	//同时向本地watch发送同步请求
 	g.updates <- &update{
 		Update:  up,
 		Service: s,
@@ -753,15 +795,17 @@ func (g *gossipRegistry) Deregister(s *registry.Service) error {
 	}
 
 	g.Lock()
+	//如果map中存在该服务
 	if service, ok := g.services[s.Name]; ok {
+		//执行移除node操作，返回需要保留的node，如果没有需要保留的node，删除该服务
 		if services := registry.Remove(service, []*registry.Service{s}); len(services) == 0 {
 			delete(g.services, s.Name)
 		} else {
+			//否则将需要保留的node放回服务内
 			g.services[s.Name] = services
 		}
 	}
 	g.Unlock()
-
 	up := &pb.Update{
 		Action: actionTypeDelete,
 		Type:   updateTypeService,
@@ -770,13 +814,14 @@ func (g *gossipRegistry) Deregister(s *registry.Service) error {
 		},
 		Data: b,
 	}
-
+	//向cluster内广播一个update数据包
 	g.queue.QueueBroadcast(&broadcast{
 		update: up,
 		notify: nil,
 	})
 
 	// send update to local watchers
+	//同时向本地watch发送同步请求
 	g.updates <- &update{
 		Update:  up,
 		Service: s,
@@ -809,7 +854,9 @@ func (g *gossipRegistry) ListServices() ([]*registry.Service, error) {
 }
 
 func (g *gossipRegistry) Watch(opts ...registry.WatchOption) (registry.Watcher, error) {
+	//新建一个registry.Result管道，作为消息subscribe通道
 	n, e := g.subscribe()
+	//将该registry.Result管道作为参数，生成一个新的gossipWatcher
 	return newGossipWatcher(n, e, opts...)
 }
 
@@ -830,6 +877,7 @@ func NewRegistry(opts ...registry.Option) registry.Registry {
 		members:  make(map[string]int32),
 	}
 	// run the updater
+	//启动服务更新监听
 	go g.run()
 
 	// configure the gossiper
