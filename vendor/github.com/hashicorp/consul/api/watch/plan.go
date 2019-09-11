@@ -63,6 +63,7 @@ func (p *Plan) RunWithClientAndLogger(client *consulapi.Client,
 OUTER:
 	for !p.shouldStop() {
 		// Invoke the handler
+		// 调用watcher来获取查询的结果
 		blockParamVal, result, err := p.Watcher(p)
 
 		// Check if we should terminate since the function

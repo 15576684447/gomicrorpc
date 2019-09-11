@@ -13,7 +13,7 @@ type watchFactory func(params map[string]interface{}) (WatcherFunc, error)
 
 // watchFuncFactory maps each type to a factory function
 var watchFuncFactory map[string]watchFactory
-
+//初始化type关键字与Watch函数的对应关系
 func init() {
 	watchFuncFactory = map[string]watchFactory{
 		"key":                  keyWatch,

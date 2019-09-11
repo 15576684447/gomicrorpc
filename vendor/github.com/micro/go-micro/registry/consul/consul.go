@@ -336,7 +336,7 @@ func (c *consulRegistry) GetService(name string) ([]*registry.Service, error) {
 		if len(address) == 0 {
 			address = s.Node.Address
 		}
-		//将svc加入到serviceMap中
+		//如果服务已经存在，则获取服务；否则，新建服务，将svc加入到serviceMap中
 		svc, ok := serviceMap[key]
 		if !ok {
 			svc = &registry.Service{
