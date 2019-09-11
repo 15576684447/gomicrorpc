@@ -39,6 +39,7 @@ func newConsulWatcher(cr *consulRegistry, opts ...registry.WatchOption) (registr
 		services: make(map[string][]*registry.Service),
 	}
 	//parse一个watch plan父节点，不包含任何服务，仅用于监听服务，并注册handle函数，用于监听服务端的数据并执行
+	//监视一系列有效的services，内部接口/v1/catalog/services
 	wp, err := watch.Parse(map[string]interface{}{"type": "services"})
 	if err != nil {
 		return nil, err
@@ -236,6 +237,7 @@ func (cw *consulWatcher) handle(idx uint64, data interface{}) {
 		//添加新服务到consulWatcher，并为服务添加watch plan以及handler，同步到cache
 		if err == nil {
 			//为每个新服务的watch plan注册一个服务serviceHandler，用于监听具体服务的变化
+			//监控指定的单个service，必须提供参数service，内部接口：/v1/health/service
 			wp.Handler = cw.serviceHandler
 			go wp.RunWithClientAndLogger(cw.r.Client, log.New(os.Stderr, "", log.LstdFlags))
 			//加入到consulWatcher
