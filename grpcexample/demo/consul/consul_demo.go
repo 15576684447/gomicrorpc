@@ -1,10 +1,8 @@
 package main
 
 import (
-"fmt"
-"net/http"
-
-consulApi "github.com/hashicorp/consul/api"
+	"fmt"
+	consulApi "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/api/watch"
 )
 
@@ -48,7 +46,6 @@ func main() {
 			panic(err)
 		}
 	}()
-	go http.ListenAndServe(":8080", nil)
 	go register()
 	for {
 		<-ch

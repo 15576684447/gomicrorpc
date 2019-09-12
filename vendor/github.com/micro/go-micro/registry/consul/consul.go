@@ -130,6 +130,8 @@ func configure(c *consulRegistry, opts ...registry.Option) {
 
 	// create the client
 	//创建Client
+	//默认Client配置如下：
+	//使用HTTP传输，并且服务器地址为127.0.0.1:8500
 	client, _ := consul.NewClient(config)
 
 	// set address/client
