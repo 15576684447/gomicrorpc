@@ -61,19 +61,39 @@ func TestNewMDNSService_BadParams(t *testing.T) {
 		}
 	}
 }
-
+//给了不正确的addr，返回必然为空，如果返回不为空，则测试失败
 func TestMDNSService_BadAddr(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
 		Name:  "random",
+		//Name:  "_http._tcp.local.",
 		Qtype: dns.TypeANY,
 	}
 	recs := s.Records(q)
+	t.Logf("%+v\n", recs)
 	if len(recs) != 0 {
 		t.Fatalf("bad: %v", recs)
 	}
 }
 
+/*
+程序执行返回
+
+	zone_test.go:97: PTR: _http._tcp.local.	120	IN	PTR	hostname._http._tcp.local.
+    zone_test.go:98: PTR.Ptr: hostname._http._tcp.local.
+    zone_test.go:104: SVR: hostname._http._tcp.local.	120	IN	SRV	10 1 80 testhost.
+    zone_test.go:109: A: testhost.	120	IN	A	192.168.0.42
+    zone_test.go:114: AAA: testhost.	120	IN	AAAA	2620:0:1000:1900:b0c2:d0b2:c411:18bc
+    zone_test.go:119: TXT: hostname._http._tcp.local.	120	IN	TXT	"Local web server"
+ */
+/*
+PTR: 包含Ptr，由 instance.service.hostName 组成
+SVR: 包含Port和Target信息，Target即服务名
+A: 包含了IPV4信息
+AAAA: 包含了IPV6信息
+TXT: 包含了附加信息
+ */
+//使用serviceAddr
 func TestMDNSService_ServiceAddr(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -81,28 +101,41 @@ func TestMDNSService_ServiceAddr(t *testing.T) {
 		Qtype: dns.TypeANY,
 	}
 	recs := s.Records(q)
+	//PTR,SVR,A,AAAA,TXT
 	if got, want := len(recs), 5; got != want {
 		t.Fatalf("got %d records, want %d: %v", got, want, recs)
 	}
+	t.Logf("Records: %+v\n", recs)
 
 	if ptr, ok := recs[0].(*dns.PTR); !ok {
 		t.Errorf("recs[0] should be PTR record, got: %v, all records: %v", recs[0], recs)
 	} else if got, want := ptr.Ptr, "hostname._http._tcp.local."; got != want {
 		t.Fatalf("bad PTR record %v: got %v, want %v", ptr, got, want)
 	}
+	ptr, _ := recs[0].(*dns.PTR)
+	t.Logf("PTR: %+v\n", ptr)
+	t.Logf("PTR.Ptr: %s\n", ptr.Ptr)
 
 	if _, ok := recs[1].(*dns.SRV); !ok {
 		t.Errorf("recs[1] should be SRV record, got: %v, all reccords: %v", recs[1], recs)
 	}
+	svr, _ := recs[1].(*dns.SRV)
+	t.Logf("SVR: %+v\n", svr)
 	if _, ok := recs[2].(*dns.A); !ok {
 		t.Errorf("recs[2] should be A record, got: %v, all records: %v", recs[2], recs)
 	}
+	a, _ := recs[2].(*dns.A)
+	t.Logf("A: %+v\n", a)
 	if _, ok := recs[3].(*dns.AAAA); !ok {
 		t.Errorf("recs[3] should be AAAA record, got: %v, all records: %v", recs[3], recs)
 	}
+	aaa, _ := recs[3].(*dns.AAAA)
+	t.Logf("AAA: %+v\n", aaa)
 	if _, ok := recs[4].(*dns.TXT); !ok {
 		t.Errorf("recs[4] should be TXT record, got: %v, all records: %v", recs[4], recs)
 	}
+	txt, _ := recs[4].(*dns.TXT)
+	t.Logf("TXT: %+v\n", txt)
 
 	q.Qtype = dns.TypePTR
 	if recs2 := s.Records(q); !reflect.DeepEqual(recs, recs2) {
@@ -110,6 +143,23 @@ func TestMDNSService_ServiceAddr(t *testing.T) {
 	}
 }
 
+//使用ServiceAddr作为name时，Qtype只能为TypeANY ?????
+func TestMDNSService_ServiceAddr_SRV(t *testing.T) {
+	s := makeService(t)
+	q := dns.Question{
+		Name:  "_http._tcp.local.",
+		//Qtype: dns.TypePTR,//len=5
+		//Qtype: dns.TypeSRV,//len=0
+		//Qtype: dns.TypeA,//len=0
+		//Qtype: dns.TypeAAAA,//len=0
+		//Qtype: dns.TypeTXT,//len=0
+		Qtype: dns.TypeANY,//len=5
+	}
+	recs := s.Records(q)
+	t.Logf("len=%d\n", len(recs))
+}
+
+//使用instanceAddr，type=ANY
 func TestMDNSService_InstanceAddr_ANY(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -117,6 +167,7 @@ func TestMDNSService_InstanceAddr_ANY(t *testing.T) {
 		Qtype: dns.TypeANY,
 	}
 	recs := s.Records(q)
+	t.Logf("%+v\n", recs)
 	if len(recs) != 4 {
 		t.Fatalf("bad: %v", recs)
 	}
@@ -133,7 +184,7 @@ func TestMDNSService_InstanceAddr_ANY(t *testing.T) {
 		t.Fatalf("bad: %v", recs[3])
 	}
 }
-
+//使用instanceAddr，type=SRV
 func TestMDNSService_InstanceAddr_SRV(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -159,7 +210,7 @@ func TestMDNSService_InstanceAddr_SRV(t *testing.T) {
 		t.Fatalf("bad: %v", recs[0])
 	}
 }
-
+//使用instanceAddr，type=A
 func TestMDNSService_InstanceAddr_A(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -178,7 +229,7 @@ func TestMDNSService_InstanceAddr_A(t *testing.T) {
 		t.Fatalf("bad: %v", recs[0])
 	}
 }
-
+//使用instanceAddr，type=AAAA
 func TestMDNSService_InstanceAddr_AAAA(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -201,7 +252,7 @@ func TestMDNSService_InstanceAddr_AAAA(t *testing.T) {
 		t.Fatalf("bad: %v", recs[0])
 	}
 }
-
+//使用instanceAddr，type=TXT
 func TestMDNSService_InstanceAddr_TXT(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{

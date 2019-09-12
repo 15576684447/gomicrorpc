@@ -16,7 +16,9 @@ func TestServer_StartStop(t *testing.T) {
 	defer serv.Shutdown()
 }
 
+//建立一个mdns服务器，并使用Query函数搜索对应名称的服务，并校验返回的服务与预期的是否相同
 func TestServer_Lookup(t *testing.T) {
+	//建立mdns服务器
 	serv, err := mdns.NewServer(&mdns.Config{Zone: makeServiceWithServiceName(t, "_foobar._tcp")})
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -28,6 +30,7 @@ func TestServer_Lookup(t *testing.T) {
 	go func() {
 		select {
 		case e := <-entries:
+			t.Logf("%+v\n", e)
 			if e.Name != "hostname._foobar._tcp.local." {
 				t.Fatalf("bad: %v", e)
 			}
@@ -43,13 +46,14 @@ func TestServer_Lookup(t *testing.T) {
 			t.Fatalf("timeout")
 		}
 	}()
-
+	//配置Query参数
 	params := &mdns.QueryParam{
 		Service: "_foobar._tcp",
 		Domain:  "local",
 		Timeout: 50 * time.Millisecond,
 		Entries: entries,
 	}
+	//搜索对应服务
 	err = mdns.Query(params)
 	if err != nil {
 		t.Fatalf("err: %v", err)
