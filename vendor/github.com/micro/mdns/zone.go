@@ -31,8 +31,11 @@ type MDNSService struct {
 	IPs          []net.IP // IP addresses for the service's host
 	TXT          []string // Service TXT records
 	TTL          uint32
+	//service.domain
 	serviceAddr  string // Fully qualified service address
+	//instant.service.domain
 	instanceAddr string // Fully qualified instance address
+	//_services._dns-sd._udp.domain
 	enumAddr     string // _services._dns-sd._udp.<domain>
 }
 
@@ -136,15 +139,16 @@ func trimDot(s string) string {
 }
 
 // Records returns DNS records in response to a DNS question.
+//Records函数返回MDNSService表格中记录的所有相关的记录
 func (m *MDNSService) Records(q dns.Question) []dns.RR {
 	switch q.Name {
-	case m.enumAddr:
+	case m.enumAddr://_services._dns-sd._udp.domain
 		return m.serviceEnum(q)
-	case m.serviceAddr:
+	case m.serviceAddr://service.domain
 		return m.serviceRecords(q)
-	case m.instanceAddr:
+	case m.instanceAddr://instant.service.domain
 		return m.instanceRecords(q)
-	case m.HostName:
+	case m.HostName://name
 		if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
 			return m.instanceRecords(q)
 		}
@@ -175,6 +179,7 @@ func (m *MDNSService) serviceEnum(q dns.Question) []dns.RR {
 }
 
 // serviceRecords is called when the query matches the service name
+//返回具有该serviceName的所有记录,serviceName=service+domain
 func (m *MDNSService) serviceRecords(q dns.Question) []dns.RR {
 	switch q.Qtype {
 	case dns.TypeANY:
@@ -206,9 +211,10 @@ func (m *MDNSService) serviceRecords(q dns.Question) []dns.RR {
 }
 
 // serviceRecords is called when the query matches the instance name
+//返回具有该instantName的所有记录,instantName=instant+service+domain
 func (m *MDNSService) instanceRecords(q dns.Question) []dns.RR {
 	switch q.Qtype {
-	case dns.TypeANY:
+	case dns.TypeANY://SRV(SRV+A+AAAA)+TXT
 		// Get the SRV, which includes A and AAAA
 		recs := m.instanceRecords(dns.Question{
 			Name:  m.instanceAddr,
@@ -222,7 +228,7 @@ func (m *MDNSService) instanceRecords(q dns.Question) []dns.RR {
 		})...)
 		return recs
 
-	case dns.TypeA:
+	case dns.TypeA://A:IPV4
 		var rr []dns.RR
 		for _, ip := range m.IPs {
 			if ip4 := ip.To4(); ip4 != nil {
@@ -239,7 +245,7 @@ func (m *MDNSService) instanceRecords(q dns.Question) []dns.RR {
 		}
 		return rr
 
-	case dns.TypeAAAA:
+	case dns.TypeAAAA://AAAA:IPV6
 		var rr []dns.RR
 		for _, ip := range m.IPs {
 			if ip.To4() != nil {
@@ -264,7 +270,7 @@ func (m *MDNSService) instanceRecords(q dns.Question) []dns.RR {
 		}
 		return rr
 
-	case dns.TypeSRV:
+	case dns.TypeSRV://SRV:SRV+A+AAAA
 		// Create the SRV Record
 		srv := &dns.SRV{
 			Hdr: dns.RR_Header{
@@ -293,7 +299,7 @@ func (m *MDNSService) instanceRecords(q dns.Question) []dns.RR {
 		})...)
 		return recs
 
-	case dns.TypeTXT:
+	case dns.TypeTXT://TXT
 		txt := &dns.TXT{
 			Hdr: dns.RR_Header{
 				Name:   q.Name,

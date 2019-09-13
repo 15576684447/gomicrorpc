@@ -61,6 +61,15 @@ func TestNewMDNSService_BadParams(t *testing.T) {
 		}
 	}
 }
+
+/*
+测试MDNSService.Records函数
+该函数实现的功能为：从MDNSService的map中获取对应服务，支持以下几种查询方式:
+_services._dns-sd._udp.<domain>	--- m.serviceEnum
+service.domain					--- m.serviceRecords
+instant.service.domain			--- m.instanceRecords
+name							--- m.instanceRecords
+ */
 //给了不正确的addr，返回必然为空，如果返回不为空，则测试失败
 func TestMDNSService_BadAddr(t *testing.T) {
 	s := makeService(t)
@@ -143,23 +152,19 @@ func TestMDNSService_ServiceAddr(t *testing.T) {
 	}
 }
 
-//使用ServiceAddr作为name时，Qtype只能为TypeANY ?????
+//使用service.domain,type=ANY/PTR,serviceRecords()
 func TestMDNSService_ServiceAddr_SRV(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
 		Name:  "_http._tcp.local.",
 		//Qtype: dns.TypePTR,//len=5
-		//Qtype: dns.TypeSRV,//len=0
-		//Qtype: dns.TypeA,//len=0
-		//Qtype: dns.TypeAAAA,//len=0
-		//Qtype: dns.TypeTXT,//len=0
 		Qtype: dns.TypeANY,//len=5
 	}
 	recs := s.Records(q)
 	t.Logf("len=%d\n", len(recs))
 }
 
-//使用instanceAddr，type=ANY
+//使用instant.service.domain，type=ANY,instanceRecords()
 func TestMDNSService_InstanceAddr_ANY(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -184,7 +189,7 @@ func TestMDNSService_InstanceAddr_ANY(t *testing.T) {
 		t.Fatalf("bad: %v", recs[3])
 	}
 }
-//使用instanceAddr，type=SRV
+//使用instant.service.domain，type=SRV,instanceRecords()
 func TestMDNSService_InstanceAddr_SRV(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -210,7 +215,7 @@ func TestMDNSService_InstanceAddr_SRV(t *testing.T) {
 		t.Fatalf("bad: %v", recs[0])
 	}
 }
-//使用instanceAddr，type=A
+//使用instant.service.domain，type=A,instanceRecords()
 func TestMDNSService_InstanceAddr_A(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -229,7 +234,7 @@ func TestMDNSService_InstanceAddr_A(t *testing.T) {
 		t.Fatalf("bad: %v", recs[0])
 	}
 }
-//使用instanceAddr，type=AAAA
+//使用instant.service.domain，type=AAAA,instanceRecords()
 func TestMDNSService_InstanceAddr_AAAA(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -252,7 +257,7 @@ func TestMDNSService_InstanceAddr_AAAA(t *testing.T) {
 		t.Fatalf("bad: %v", recs[0])
 	}
 }
-//使用instanceAddr，type=TXT
+//使用instant.service.domain，type=TXT,instanceRecords()
 func TestMDNSService_InstanceAddr_TXT(t *testing.T) {
 	s := makeService(t)
 	q := dns.Question{
@@ -271,7 +276,7 @@ func TestMDNSService_InstanceAddr_TXT(t *testing.T) {
 		t.Fatalf("TXT record mismatch for %v: got %v, want %v", recs[0], got, want)
 	}
 }
-
+//使用name,type=A/AAAA,instanceRecords()
 func TestMDNSService_HostNameQuery(t *testing.T) {
 	s := makeService(t)
 	for _, test := range []struct {
