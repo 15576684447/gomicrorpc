@@ -130,6 +130,8 @@ func configure(c *consulRegistry, opts ...registry.Option) {
 
 	// create the client
 	//创建Client
+	//默认Client配置如下：
+	//使用HTTP传输，并且服务器地址为127.0.0.1:8500
 	client, _ := consul.NewClient(config)
 
 	// set address/client
@@ -299,15 +301,15 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 	//否则，设置服务状态为健康
 	return c.Client.Agent().PassTTL("service:"+node.Id, "")
 }
-
+//获取所有服务，帅选出名字为name的服务，剔除那些不健康的节点并返回
 func (c *consulRegistry) GetService(name string) ([]*registry.Service, error) {
 	var rsp []*consul.ServiceEntry
 	var err error
 
 	// if we're connect enabled only get connect services
-	if c.connect {
+	if c.connect {//如果使能了连接，则获取那些通过健康检查且可连接的服务
 		rsp, _, err = c.Client.Health().Connect(name, "", false, c.queryOptions)
-	} else {
+	} else {//否则，返回那些通过健康检查的服务
 		rsp, _, err = c.Client.Health().Service(name, "", false, c.queryOptions)
 	}
 	if err != nil {
@@ -315,13 +317,14 @@ func (c *consulRegistry) GetService(name string) ([]*registry.Service, error) {
 	}
 
 	serviceMap := map[string]*registry.Service{}
-
+	//遍历所有返回的服务，找到名字为name的服务
 	for _, s := range rsp {
 		if s.Service.Service != name {
 			continue
 		}
 
 		// version is now a tag
+		//从Tag中解析version，同时也当作key值
 		version, _ := decodeVersion(s.Service.Tags)
 		// service ID is now the node id
 		id := s.Service.ID
@@ -335,10 +338,11 @@ func (c *consulRegistry) GetService(name string) ([]*registry.Service, error) {
 		if len(address) == 0 {
 			address = s.Node.Address
 		}
-
+		//如果服务已经存在，则获取服务；否则，新建服务，将svc加入到serviceMap中
 		svc, ok := serviceMap[key]
 		if !ok {
 			svc = &registry.Service{
+				//从Tag中解析出EndPoints参数
 				Endpoints: decodeEndpoints(s.Service.Tags),
 				Name:      s.Service.Service,
 				Version:   version,
@@ -347,7 +351,7 @@ func (c *consulRegistry) GetService(name string) ([]*registry.Service, error) {
 		}
 
 		var del bool
-
+		//去除那些status=critical的节点
 		for _, check := range s.Checks {
 			// delete the node if the status is critical
 			if check.Status == "critical" {
@@ -360,21 +364,22 @@ func (c *consulRegistry) GetService(name string) ([]*registry.Service, error) {
 		if del {
 			continue
 		}
-
+		//如果节点健康，才加入到service的节点中
 		svc.Nodes = append(svc.Nodes, &registry.Node{
 			Id:       id,
 			Address:  fmt.Sprintf("%s:%d", address, s.Service.Port),
+			//从Tag中解析Metadata
 			Metadata: decodeMetadata(s.Service.Tags),
 		})
 	}
-
+	//整理所有service
 	var services []*registry.Service
 	for _, service := range serviceMap {
 		services = append(services, service)
 	}
 	return services, nil
 }
-
+//返回所有服务，不管是否健康，这里只获取了服务名列表
 func (c *consulRegistry) ListServices() ([]*registry.Service, error) {
 	rsp, _, err := c.Client.Catalog().Services(c.queryOptions)
 	if err != nil {

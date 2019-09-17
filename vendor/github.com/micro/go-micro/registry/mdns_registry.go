@@ -55,14 +55,19 @@ func (m *mdnsRegistry) Init(opts ...Option) error {
 func (m *mdnsRegistry) Options() Options {
 	return m.opts
 }
-
+//注册mdns服务，服务以mdnsEntry结构存在，主要有一下特性
+//mdnsEntry结构中必须包含一个主节点，专门用于广播入口；另外每个service node生成一个属于自己的entry，加入到mdnsEntry中
+//主节点的id为*，service node自节点id为node的hash值
+//当注销服务的mdnsEntry时，如果最后只剩一个entry且id为*，说明只剩主节点，也要一并删除，代表该服务不再存在
 func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error {
 	m.Lock()
 	defer m.Unlock()
-
+	//检查服务是否已经存在，不存在则新建mdns服务节点
 	entries, ok := m.services[service.Name]
 	// first entry, create wildcard used for list queries
 	if !ok {
+		//首先注册一个服务实例，serverName作为InstantName，"_services"作为service字段，用于ListService返回
+		//没有其他信息，可以将服务实例理解为对应服务的壳，里面包含若干个该服务的Node节点
 		s, err := mdns.NewMDNSService(
 			service.Name,
 			"_services",
@@ -75,20 +80,22 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 		if err != nil {
 			return err
 		}
-
+		//新建mdns服务器，建立IPV4或者IPV6组内监听，接收组内广播或者单播，根据包的类型区分；并且通过probe函数向组内发送本服务信息
 		srv, err := mdns.NewServer(&mdns.Config{Zone: &mdns.DNSSDService{s}})
 		if err != nil {
 			return err
 		}
 
 		// append the wildcard entry
+		//先添加广播入口至mdnsEntry，其id固定为*
 		entries = append(entries, &mdnsEntry{id: "*", node: srv})
 	}
 
 	var gerr error
-
+	//遍历该服务的Nodes
 	for _, node := range service.Nodes {
 		// create hash of service; uint64
+		//hash化node
 		h, err := hash.Hash(node, nil)
 		if err != nil {
 			gerr = err
@@ -97,7 +104,7 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 
 		var seen bool
 		var e *mdnsEntry
-
+		//查看该服务的entries是否已经包含了待注册的node
 		for _, entry := range entries {
 			if node.Id == entry.id {
 				seen = true
@@ -107,16 +114,20 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 		}
 
 		// already registered, continue
+		//如果存在并且id的hash值也一样，说明是同一个服务，跳过该node的添加
 		if seen && e.hash == h {
 			continue
 			// hash doesn't match, shutdown
+			//如果仅仅是id相同，但是node的hash值不同，说明不匹配，关闭旧的node；使用新的替代
 		} else if seen {
+			//注销服务
 			e.node.Shutdown()
 			// doesn't exist
 		} else {
+			//如果是新的node节点，添加新节点，首先初始化的就是其hash值字段
 			e = &mdnsEntry{hash: h}
 		}
-
+		//将服务具体信息编码成TXT，TXT在mDNS作为附加信息存在
 		txt, err := encode(&mdnsTxt{
 			Service:   service.Name,
 			Version:   service.Version,
@@ -129,7 +140,7 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 			continue
 		}
 
-		//
+		//取出ip和port
 		host, pt, err := net.SplitHostPort(node.Address)
 		if err != nil {
 			gerr = err
@@ -138,6 +149,9 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 		port, _ := strconv.Atoi(pt)
 
 		// we got here, new node
+		//具体服务信息，包括服务名，IP，port以及服务具体信息txt
+		//服务内的每个Node包含唯一的node.Id信息，Id通过将Node信息取hash值获取
+		//将id作为InstantName字段，serverName作为server字段
 		s, err := mdns.NewMDNSService(
 			node.Id,
 			service.Name,
@@ -151,7 +165,7 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 			gerr = err
 			continue
 		}
-
+		//将服务使用mDNS在局域网内注册，具体包括PTR，SRV，TXT部分
 		srv, err := mdns.NewServer(&mdns.Config{Zone: s})
 		if err != nil {
 			gerr = err
@@ -160,10 +174,12 @@ func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error 
 
 		e.id = node.Id
 		e.node = srv
+		//向该服务的entries内新加一个节点
 		entries = append(entries, e)
 	}
 
 	// save
+	//保存服务到本地map
 	m.services[service.Name] = entries
 
 	return gerr
@@ -180,6 +196,7 @@ func (m *mdnsRegistry) Deregister(service *Service) error {
 		var remove bool
 
 		for _, node := range service.Nodes {
+			//只注销与传入的service节点id相同的服务
 			if node.Id == entry.id {
 				entry.node.Shutdown()
 				remove = true
@@ -188,16 +205,19 @@ func (m *mdnsRegistry) Deregister(service *Service) error {
 		}
 
 		// keep it?
+		//否则保留
 		if !remove {
 			newEntries = append(newEntries, entry)
 		}
 	}
 
 	// last entry is the wildcard for list queries. Remove it.
+	//如果只剩最后一个节点且id为*，说明是该服务的实例，只用于ListService返回，删除
 	if len(newEntries) == 1 && newEntries[0].id == "*" {
 		newEntries[0].node.Shutdown()
 		delete(m.services, service.Name)
 	} else {
+		//否则将未注销的服务放回
 		m.services[service.Name] = newEntries
 	}
 
@@ -208,11 +228,15 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 	serviceMap := make(map[string]*Service)
 	entries := make(chan *mdns.ServiceEntry, 10)
 	done := make(chan bool)
-
+	//获取请求默认参数，并指定ctx超时参数以及服务传递管道
+	//程序将Query执行结果传入管道，并在下面的程序中等待管道中的服务返回
+	//并逐个验证，获取想要的服务，并返回
+	//GetService需要获取某个服务的详细信息，Service字段指定具体服务名，而不是向ListService那样，传入的是"_services"
 	p := mdns.DefaultParams(service)
 	// set context with timeout
 	p.Context, _ = context.WithTimeout(context.Background(), m.opts.Timeout)
 	// set entries channel
+	//消息传递管道，将该管道传递进Query函数，将Query结果通过管道传递出来，并在下面的线程中接收处理
 	p.Entries = entries
 
 	go func() {
@@ -220,6 +244,7 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 			select {
 			case e := <-entries:
 				// list record so skip
+				//忽略返回service字段为"_services"的服务实例，该服务用于ListSevice使用
 				if p.Service == "_services" {
 					continue
 				}
@@ -236,7 +261,7 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 				if txt.Service != service {
 					continue
 				}
-
+				//如果返回的service是想要获取的，则获取服务信息
 				s, ok := serviceMap[txt.Version]
 				if !ok {
 					s = &Service{
@@ -245,13 +270,13 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 						Endpoints: txt.Endpoints,
 					}
 				}
-
+				//为服务添加节点
 				s.Nodes = append(s.Nodes, &Node{
 					Id:       strings.TrimSuffix(e.Name, "."+p.Service+"."+p.Domain+"."),
 					Address:  fmt.Sprintf("%s:%d", e.AddrV4.String(), e.Port),
 					Metadata: txt.Metadata,
 				})
-
+				//添加服务到表格
 				serviceMap[txt.Version] = s
 			case <-p.Context.Done():
 				close(done)
@@ -261,11 +286,13 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 	}()
 
 	// execute the query
+	//执行请求服务，主要是在组内广播其他服务，等待其他服务返回
 	if err := mdns.Query(p); err != nil {
 		return nil, err
 	}
 
 	// wait for completion
+	//结束以Context超时为准
 	<-done
 
 	// create list and return
@@ -277,12 +304,12 @@ func (m *mdnsRegistry) GetService(service string) ([]*Service, error) {
 
 	return services, nil
 }
-
+//返回服务实例列表，不需要详细信息，只要实例名即可
 func (m *mdnsRegistry) ListServices() ([]*Service, error) {
 	serviceMap := make(map[string]bool)
 	entries := make(chan *mdns.ServiceEntry, 10)
 	done := make(chan bool)
-
+	//默认参数设置为获取服务实例
 	p := mdns.DefaultParams("_services")
 	// set context with timeout
 	p.Context, _ = context.WithTimeout(context.Background(), m.opts.Timeout)
@@ -298,10 +325,12 @@ func (m *mdnsRegistry) ListServices() ([]*Service, error) {
 				if e.TTL == 0 {
 					continue
 				}
-
+				//去除entry名字中格式为.service.domain.的后缀
+				//实际解析的PTR数据包，格式为<service>.<transport>.<domain>，去除后缀后只剩服务名
 				name := strings.TrimSuffix(e.Name, "."+p.Service+"."+p.Domain+".")
 				if !serviceMap[name] {
 					serviceMap[name] = true
+					//ListServices不需要服务的详细信息，只要其服务实例名字即可
 					services = append(services, &Service{Name: name})
 				}
 			case <-p.Context.Done():
