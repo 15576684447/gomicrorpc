@@ -88,16 +88,19 @@ func keyPrefixWatch(params map[string]interface{}) (WatcherFunc, error) {
 }
 
 // servicesWatch is used to watch the list of available services
+//用于监听所有服务动态，返回servers的watch函数，实则获取consul Catalog，然后通过HTTP请求访问consul服务器
 func servicesWatch(params map[string]interface{}) (WatcherFunc, error) {
 	stale := false
 	if err := assignValueBool(params, "stale", &stale); err != nil {
 		return nil, err
 	}
-
+	//servers监听最终返回的watch函数,
 	fn := func(p *Plan) (BlockingParamVal, interface{}, error) {
+		//获取consul catalog
 		catalog := p.client.Catalog()
 		opts := makeQueryOptionsWithContext(p, stale)
 		defer p.cancelFunc()
+		//执行Services获取请求，默认通过HTTP请求
 		services, meta, err := catalog.Services(&opts)
 		if err != nil {
 			return nil, nil, err
@@ -128,6 +131,7 @@ func nodesWatch(params map[string]interface{}) (WatcherFunc, error) {
 }
 
 // serviceWatch is used to watch a specific service for changes
+//用于监听特定服务动态，返回特定服务的watch函数，实则获取consul Health，然后通过HTTP请求访问consul服务器
 func serviceWatch(params map[string]interface{}) (WatcherFunc, error) {
 	stale := false
 	if err := assignValueBool(params, "stale", &stale); err != nil {
@@ -138,6 +142,7 @@ func serviceWatch(params map[string]interface{}) (WatcherFunc, error) {
 		service string
 		tags    []string
 	)
+	//必须指定需要监听的特定服务实例名
 	if err := assignValue(params, "service", &service); err != nil {
 		return nil, err
 	}
@@ -154,9 +159,11 @@ func serviceWatch(params map[string]interface{}) (WatcherFunc, error) {
 	}
 
 	fn := func(p *Plan) (BlockingParamVal, interface{}, error) {
+		//获取consul health
 		health := p.client.Health()
 		opts := makeQueryOptionsWithContext(p, stale)
 		defer p.cancelFunc()
+		//通过请求，获取健康的服务
 		nodes, meta, err := health.ServiceMultipleTags(service, tags, passingOnly, &opts)
 		if err != nil {
 			return nil, nil, err
